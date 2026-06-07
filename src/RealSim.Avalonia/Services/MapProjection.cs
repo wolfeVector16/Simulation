@@ -145,9 +145,9 @@ public static class MapProjection
                 Kind: MapPrimitiveKind.Neighborhood,
                 Name: item.Value.Name,
                 Points: Ellipse(center, 160, 104, 24),
-                Fill: $"#3F5E7A{(70 + pressureTint).ToString("X2", CultureInfo.InvariantCulture)}",
+                Fill: $"#3F5E7A{(15 + pressureTint / 2).ToString("X2", CultureInfo.InvariantCulture)}",
                 Stroke: "#6F89B8",
-                Thickness: 1.4,
+                Thickness: 0.8,
                 Radius: 0.0,
                 Details: $"population={item.Value.Residents.Count}, land value={item.Value.LandValue:0.00}, rent pressure={item.Value.RentPressure:0.00}, safety={item.Value.Safety:0.00}, transit={item.Value.TransitAccess:0.00}",
                 Category: "Neighborhood",
@@ -165,7 +165,7 @@ public static class MapProjection
             var center = OffsetForId(project(parcel.Position), item.Key.ToString(), 3.2);
             var building = parcel.Building?.Value;
             var hasBuilding = building is not null;
-            var size = hasBuilding ? BuildingSize(building!.Use.ToString(), parcel.Density.ToString()) : 14.0;
+            var size = hasBuilding ? BuildingSize(building!.Use.ToString(), parcel.Density.ToString()) : 10.0;
             var category = hasBuilding ? building!.Use.ToString() : parcel.Zone.ToString();
 
             yield return new MapPrimitive(
@@ -175,7 +175,7 @@ public static class MapProjection
                 Points: BuildingShape(center, size, size, hasBuilding ? BuildingSymbol(building!.Use.ToString()) : MapSymbol.Square),
                 Fill: hasBuilding ? BuildingFill(building!.Use.ToString(), building.Status.ToString()) : "#00000000",
                 Stroke: hasBuilding ? BuildingStroke(building!.Use.ToString()) : "#91A58E",
-                Thickness: hasBuilding ? 1.4 : 0.8,
+                Thickness: hasBuilding ? 0.8 : 0.4,
                 Radius: 0.0,
                 Details: hasBuilding
                     ? $"use={Readable(building!.Use.ToString())}, status={Readable(building.Status.ToString())}, capacity={building.Capacity}, occupants={building.Occupants}, jobs={building.Jobs}, parcel={parcel.Name}, zone={Readable(parcel.Zone.ToString())}, condition powered={parcel.Powered}, watered={parcel.Watered}, road={parcel.RoadConnected}"
@@ -378,7 +378,7 @@ public static class MapProjection
                 Id: item.Key.ToString(),
                 Kind: MapPrimitiveKind.Household,
                 Name: household.Name,
-                Points: SymbolShape(point, 7.0, MapSymbol.House),
+                Points: SymbolShape(point, 5.0, MapSymbol.House),
                 Fill: "#FFD166",
                 Stroke: "#7A4D00",
                 Thickness: 1.0,
@@ -1065,18 +1065,18 @@ public static class MapProjection
     {
         var size = use switch
         {
-            "Housing" => 18.0,
-            "Commerce" => 22.0,
-            "Industry" => 28.0,
-            "PublicService" => 24.0,
-            "Recreation" => 20.0,
-            _ => 18.0
+            "Housing" => 12.0,
+            "Commerce" => 15.0,
+            "Industry" => 20.0,
+            "PublicService" => 16.0,
+            "Recreation" => 14.0,
+            _ => 12.0
         };
 
         return density switch
         {
-            "HighDensity" => size + 8.0,
-            "MediumDensity" => size + 3.0,
+            "HighDensity" => size + 5.0,
+            "MediumDensity" => size + 2.0,
             _ => size
         };
     }
@@ -1142,12 +1142,12 @@ public static class MapProjection
     {
         return kind switch
         {
-            "Commercial" => 8.0,
-            "Industrial" or "Warehouse" => 8.5,
-            "School" or "Daycare" => 9.0,
-            "Park" => 8.0,
-            "Civic" => 8.0,
-            _ => 5.4
+            "Commercial" => 6.0,
+            "Industrial" or "Warehouse" => 6.5,
+            "School" or "Daycare" => 7.0,
+            "Park" => 6.0,
+            "Civic" => 6.0,
+            _ => 4.0
         };
     }
 
@@ -1208,15 +1208,15 @@ public static class MapProjection
     {
         return roadClass switch
         {
-            "Highway" or "Freeway" => 7.2,
-            "Arterial" => 5.3,
-            "Collector" => 3.7,
-            "IndustrialRoad" or "FreightCorridor" => 4.2,
-            "TransitCorridor" or "TransitMall" => 4.0,
-            "LocalStreet" => 2.4,
-            "Alley" or "ServiceRoad" => 1.7,
-            "PedestrianPath" or "BikePath" => 1.8,
-            _ => 2.3
+            "Highway" or "Freeway" => 8.5,
+            "Arterial" => 6.5,
+            "Collector" => 4.5,
+            "IndustrialRoad" or "FreightCorridor" => 5.0,
+            "TransitCorridor" or "TransitMall" => 4.8,
+            "LocalStreet" => 3.2,
+            "Alley" or "ServiceRoad" => 2.2,
+            "PedestrianPath" or "BikePath" => 2.2,
+            _ => 3.0
         };
     }
 

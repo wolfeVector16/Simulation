@@ -56,6 +56,95 @@ public sealed class CityMapView : Control
         }
     }
 
+    public class ResolvedMarker
+    {
+        public string Id { get; set; } = "";
+        public Point BaseScreenPoint { get; set; }
+        public Point OffsetScreenPoint { get; set; }
+        public double Radius { get; set; }
+        public object Source { get; set; } = null!;
+    }
+
+    private class LabelCandidate
+    {
+        public string Id { get; set; } = "";
+        public string Text { get; set; } = "";
+        public Point AnchorPoint { get; set; }
+        public int Priority { get; set; }
+        public bool IsSelected { get; set; }
+    }
+
+    public static bool IntersectsPublic(Rect r1, Rect r2)
+    {
+        return Intersects(r1, r2);
+    }
+
+    public System.Collections.Generic.List<ResolvedMarker> ResolveMarkers(MapViewModel viewModel)
+    {
+        var resolved = new System.Collections.Generic.List<ResolvedMarker>();
+        var placedPoints = new System.Collections.Generic.List<Point>();
+        var now = DateTime.UtcNow;
+
+        var pointPrimitives = viewModel.VisiblePrimitives
+            .Where(p => p.Kind is MapPrimitiveKind.Place or MapPrimitiveKind.Institution or MapPrimitiveKind.Household or MapPrimitiveKind.Destination or MapPrimitiveKind.EventMarker)
+            .Select(p => new {
+                Id = p.Id,
+                BasePoint = p.Points.Count == 1 || p.Radius > 0.0 ? MapToScreen(viewModel, p.Points[0]) : ScreenCenter(viewModel, p.Points),
+                Radius = Math.Max(p.Radius, 5.0) * Math.Sqrt(viewModel.Zoom),
+                Source = (object)p,
+                IsSelected = p == viewModel.SelectedPrimitive
+            });
+
+        var moving = viewModel.MovingEntities
+            .Where(viewModel.IsMovingEntityVisible)
+            .Select(e => new {
+                Id = e.Id,
+                BasePoint = MapToScreen(viewModel, e.Interpolate(now)),
+                Radius = MovingRadius(e.Kind) * Math.Sqrt(viewModel.Zoom),
+                Source = (object)e,
+                IsSelected = e == viewModel.SelectedMovingEntity
+            });
+
+        var allCandidates = pointPrimitives.Concat(moving)
+            .OrderByDescending(x => x.IsSelected)
+            .ThenBy(x => x.Id)
+            .ToArray();
+
+        foreach (var c in allCandidates)
+        {
+            Point offsetPoint = c.BasePoint;
+            int overlapCount = 0;
+            foreach (var pt in placedPoints)
+            {
+                double dx = pt.X - c.BasePoint.X;
+                double dy = pt.Y - c.BasePoint.Y;
+                if (Math.Sqrt(dx * dx + dy * dy) < 8.0)
+                {
+                    overlapCount++;
+                }
+            }
+
+            if (overlapCount > 0 && !c.IsSelected)
+            {
+                var hash = c.Id.GetHashCode();
+                double angle = overlapCount * (2.0 * Math.PI / 6.0) + (Math.Abs(hash) % 10) * 0.1;
+                double radius = 10.0 + (overlapCount / 6) * 4.0;
+                offsetPoint = new Point(c.BasePoint.X + Math.Cos(angle) * radius, c.BasePoint.Y + Math.Sin(angle) * radius);
+            }
+
+            placedPoints.Add(offsetPoint);
+            resolved.Add(new ResolvedMarker {
+                Id = c.Id,
+                BaseScreenPoint = c.BasePoint,
+                OffsetScreenPoint = offsetPoint,
+                Radius = c.Radius,
+                Source = c.Source
+            });
+        }
+
+        return resolved;
+    }
+
     public override void Render(DrawingContext context)
     {
         base.Render(context);
@@ -69,13 +158,26 @@ public sealed class CityMapView : Control
 
         DrawGrid(context, viewModel);
 
+        var resolvedMarkers = ResolveMarkers(viewModel);
+        var markerLookup = resolvedMarkers.ToDictionary(m => m.Id);
+
         foreach (var primitive in viewModel.VisiblePrimitives.OrderBy(LayerOrder))
         {
-            DrawPrimitive(context, viewModel, primitive, primitive == viewModel.SelectedPrimitive);
+            if (markerLookup.TryGetValue(primitive.Id, out var resolved))
+            {
+                var fill = new SolidColorBrush(Color.Parse(primitive == viewModel.SelectedPrimitive ? "#FFF3B0" : primitive.Fill));
+                var stroke = new SolidColorBrush(Color.Parse(primitive == viewModel.SelectedPrimitive ? "#FFD60A" : primitive.Stroke));
+                var pen = new Pen(stroke, primitive.Thickness * Math.Sqrt(viewModel.Zoom) + (primitive == viewModel.SelectedPrimitive ? 2.4 : 0.0));
+                DrawSymbol(context, primitive.Symbol, resolved.OffsetScreenPoint, resolved.Radius, fill, pen, primitive == viewModel.SelectedPrimitive);
+            }
+            else
+            {
+                DrawPrimitive(context, viewModel, primitive, primitive == viewModel.SelectedPrimitive);
+            }
         }
 
-        DrawMovingEntities(context, viewModel);
-        DrawLabels(context, viewModel);
+        DrawMovingEntities(context, viewModel, markerLookup);
+        DrawLabels(context, viewModel, resolvedMarkers);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -118,19 +220,40 @@ public sealed class CityMapView : Control
             var moved = releasePosition - _pressPosition.Value;
             if (Math.Sqrt(moved.X * moved.X + moved.Y * moved.Y) < 4.0)
             {
-                var world = ScreenToMap(ViewModel, releasePosition);
-                var tolerance = 16.0 / Math.Max(0.1, EffectiveScale(ViewModel));
-                var movingEntity = ViewModel.MovingEntityAt(world.X, world.Y, tolerance);
-                if (movingEntity is not null)
+                var resolvedMarkers = ResolveMarkers(ViewModel);
+                var hitMarker = resolvedMarkers
+                    .Select(m => new { Marker = m, Dist = Math.Sqrt(Math.Pow(releasePosition.X - m.OffsetScreenPoint.X, 2.0) + Math.Pow(releasePosition.Y - m.OffsetScreenPoint.Y, 2.0)) })
+                    .Where(x => x.Dist <= Math.Max(x.Marker.Radius + 4.0, 10.0))
+                    .OrderBy(x => x.Dist)
+                    .FirstOrDefault();
+
+                if (hitMarker is not null)
                 {
-                    ViewModel.SelectMovingEntity(movingEntity);
+                    if (hitMarker.Marker.Source is MovingEntityViewModel mem)
+                    {
+                        ViewModel.SelectMovingEntity(mem);
+                    }
+                    else if (hitMarker.Marker.Source is MapPrimitive p)
+                    {
+                        ViewModel.SelectedPrimitive = p;
+                    }
+                    InvalidateVisual();
                 }
                 else
                 {
-                    ViewModel.SelectAt(world.X, world.Y, tolerance);
+                    var world = ScreenToMap(ViewModel, releasePosition);
+                    var tolerance = 16.0 / Math.Max(0.1, EffectiveScale(ViewModel));
+                    var movingEntity = ViewModel.MovingEntityAt(world.X, world.Y, tolerance);
+                    if (movingEntity is not null)
+                    {
+                        ViewModel.SelectMovingEntity(movingEntity);
+                    }
+                    else
+                    {
+                        ViewModel.SelectAt(world.X, world.Y, tolerance);
+                    }
+                    InvalidateVisual();
                 }
-
-                InvalidateVisual();
             }
         }
 
@@ -337,7 +460,7 @@ public sealed class CityMapView : Control
             case MapSymbol.Bus:
             case MapSymbol.Truck:
             case MapSymbol.Emergency:
-                context.DrawRectangle(fill, pen, new Rect(center.X - radius * 1.25, center.Y - radius * 0.65, radius * 2.5, radius * 1.3));
+                context.DrawEllipse(fill, pen, center, radius * 1.25, radius * 1.25);
                 if (symbol == MapSymbol.Emergency)
                 {
                     context.DrawLine(pen, new Point(center.X - radius * 0.45, center.Y), new Point(center.X + radius * 0.45, center.Y));
@@ -382,7 +505,7 @@ public sealed class CityMapView : Control
         context.DrawGeometry(fill, pen, geometry);
     }
 
-    private void DrawMovingEntities(DrawingContext context, MapViewModel viewModel)
+    private void DrawMovingEntities(DrawingContext context, MapViewModel viewModel, System.Collections.Generic.Dictionary<string, ResolvedMarker> markerLookup)
     {
         var now = DateTime.UtcNow;
         var visibleEntities = viewModel.MovingEntities.Where(viewModel.IsMovingEntityVisible).OrderBy(entity => entity.Id).ToArray();
@@ -400,15 +523,28 @@ public sealed class CityMapView : Control
 
         foreach (var entity in visibleEntities)
         {
-            var position = MapToScreen(viewModel, entity.Interpolate(now));
             var selected = entity == viewModel.SelectedMovingEntity;
             var fill = new SolidColorBrush(Color.Parse(selected ? "#FFF3B0" : MovingFill(entity.Kind)));
             var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFD60A" : MovingStroke(entity.Kind))), selected ? 3.0 : 1.4);
-            DrawSymbol(context, MovingSymbol(entity.Kind), position, MovingRadius(entity.Kind) * Math.Sqrt(viewModel.Zoom), fill, pen, selected);
+
+            Point position;
+            double radius;
+            if (markerLookup.TryGetValue(entity.Id, out var resolved))
+            {
+                position = resolved.OffsetScreenPoint;
+                radius = resolved.Radius;
+            }
+            else
+            {
+                position = MapToScreen(viewModel, entity.Interpolate(now));
+                radius = MovingRadius(entity.Kind) * Math.Sqrt(viewModel.Zoom);
+            }
+
+            DrawSymbol(context, MovingSymbol(entity.Kind), position, radius, fill, pen, selected);
 
             if (entity.IsDelayedOrBlocked)
             {
-                var markerCenter = position + new Point(0, -MovingRadius(entity.Kind) * Math.Sqrt(viewModel.Zoom) - 8.0);
+                var markerCenter = position + new Point(0, -radius - 8.0);
                 DrawSymbol(
                     context,
                     MapSymbol.Warning,
@@ -421,30 +557,212 @@ public sealed class CityMapView : Control
         }
     }
 
-    private void DrawLabels(DrawingContext context, MapViewModel viewModel)
+    private void DrawLabels(DrawingContext context, MapViewModel viewModel, System.Collections.Generic.List<ResolvedMarker> resolvedMarkers)
     {
         if (!viewModel.ShowLabels)
         {
             return;
         }
 
-        var labelLimit = viewModel.Zoom < 0.75 ? 26 : viewModel.Zoom < 1.5 ? 70 : 140;
-        var labels = viewModel.VisiblePrimitives
-            .Where(primitive => primitive.Name.Length > 0 && (viewModel.Zoom >= primitive.LabelMinZoom || primitive == viewModel.SelectedPrimitive))
-            .OrderBy(primitive => primitive == viewModel.SelectedPrimitive ? -1 : primitive.LabelPriority)
-            .ThenBy(primitive => primitive.Id)
-            .Take(labelLimit)
+        var now = DateTime.UtcNow;
+        var acceptedLabelRects = new System.Collections.Generic.List<Rect>();
+
+        var occupiedRects = new System.Collections.Generic.List<Rect>();
+        foreach (var m in resolvedMarkers)
+        {
+            occupiedRects.Add(new Rect(m.OffsetScreenPoint.X - m.Radius, m.OffsetScreenPoint.Y - m.Radius, m.Radius * 2.0, m.Radius * 2.0));
+        }
+
+        var candidates = new System.Collections.Generic.List<LabelCandidate>();
+
+        if (viewModel.SelectedPrimitive is not null && !string.IsNullOrEmpty(viewModel.SelectedPrimitive.Name))
+        {
+            candidates.Add(new LabelCandidate
+            {
+                Id = viewModel.SelectedPrimitive.Id,
+                Text = viewModel.SelectedPrimitive.Name,
+                AnchorPoint = LabelPoint(viewModel, viewModel.SelectedPrimitive),
+                Priority = 1,
+                IsSelected = true
+            });
+        }
+
+        if (viewModel.SelectedMovingEntity is not null)
+        {
+            var m = resolvedMarkers.FirstOrDefault(rm => rm.Id == viewModel.SelectedMovingEntity.Id);
+            Point anchor = m != null ? m.OffsetScreenPoint + new Point(10, -24) : MapToScreen(viewModel, viewModel.SelectedMovingEntity.Interpolate(now)) + new Point(10, -24);
+            candidates.Add(new LabelCandidate
+            {
+                Id = viewModel.SelectedMovingEntity.Id,
+                Text = viewModel.SelectedMovingEntity.DisplayName,
+                AnchorPoint = anchor,
+                Priority = 1,
+                IsSelected = true
+            });
+        }
+
+        foreach (var p in viewModel.VisiblePrimitives)
+        {
+            if (p == viewModel.SelectedPrimitive || string.IsNullOrEmpty(p.Name))
+            {
+                continue;
+            }
+
+            bool allowed = false;
+            if (viewModel.Zoom < 0.75)
+            {
+                allowed = p.Kind == MapPrimitiveKind.Neighborhood;
+            }
+            else if (viewModel.Zoom < 1.5)
+            {
+                allowed = p.Kind == MapPrimitiveKind.Neighborhood ||
+                          p.Kind == MapPrimitiveKind.Institution ||
+                          (p.Kind == MapPrimitiveKind.Road && (p.Category == "Highway" || p.Category == "Freeway" || p.Category == "Arterial" || p.Category == "Collector" || p.Thickness >= 3.5));
+            }
+            else
+            {
+                allowed = true;
+            }
+
+            if (!allowed)
+            {
+                continue;
+            }
+
+            int priority = p.Kind switch
+            {
+                MapPrimitiveKind.Institution => 3,
+                MapPrimitiveKind.Neighborhood => 4,
+                MapPrimitiveKind.Road => 5,
+                MapPrimitiveKind.Building or MapPrimitiveKind.Place => 6,
+                MapPrimitiveKind.Household => 7,
+                _ => 8
+            };
+
+            Point anchor = LabelPoint(viewModel, p);
+            if (p.Kind is MapPrimitiveKind.Place or MapPrimitiveKind.Institution or MapPrimitiveKind.Household or MapPrimitiveKind.Destination or MapPrimitiveKind.EventMarker)
+            {
+                var rm = resolvedMarkers.FirstOrDefault(m => m.Id == p.Id);
+                if (rm != null)
+                {
+                    anchor = rm.OffsetScreenPoint + new Point(6, -18);
+                }
+            }
+
+            candidates.Add(new LabelCandidate
+            {
+                Id = p.Id,
+                Text = p.Name,
+                AnchorPoint = anchor,
+                Priority = priority,
+                IsSelected = false
+            });
+        }
+
+        if (viewModel.Zoom >= 1.5)
+        {
+            foreach (var e in viewModel.MovingEntities.Where(viewModel.IsMovingEntityVisible))
+            {
+                if (viewModel.SelectedMovingEntity != null && e.Id == viewModel.SelectedMovingEntity.Id)
+                {
+                    continue;
+                }
+
+                var rm = resolvedMarkers.FirstOrDefault(m => m.Id == e.Id);
+                Point anchor = rm != null ? rm.OffsetScreenPoint + new Point(10, -24) : MapToScreen(viewModel, e.Interpolate(now)) + new Point(10, -24);
+
+                candidates.Add(new LabelCandidate
+                {
+                    Id = e.Id,
+                    Text = e.DisplayName,
+                    AnchorPoint = anchor,
+                    Priority = 2,
+                    IsSelected = false
+                });
+            }
+        }
+
+        var orderedCandidates = candidates
+            .OrderBy(c => c.Priority)
+            .ThenBy(c => c.Id)
             .ToArray();
 
-        foreach (var primitive in labels)
+        foreach (var cand in orderedCandidates)
         {
-            DrawLabel(context, LabelPoint(viewModel, primitive), primitive.Name, primitive == viewModel.SelectedPrimitive);
-        }
+            var formatted = new FormattedText(
+                cand.Text,
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Inter"),
+                cand.IsSelected ? 13.0 : 11.0,
+                Brushes.Black);
 
-        foreach (var entity in viewModel.MovingEntities.Where(entity => entity == viewModel.SelectedMovingEntity))
-        {
-            DrawLabel(context, MapToScreen(viewModel, entity.Interpolate(DateTime.UtcNow)) + new Point(10, -24), entity.DisplayName, true);
+            double width = formatted.Width + 6.0;
+            double height = formatted.Height + 4.0;
+
+            var offsets = new[]
+            {
+                new Point(0, 0),
+                new Point(0, -height - 4),
+                new Point(0, height + 4),
+                new Point(width + 4, 0),
+                new Point(-width - 4, 0)
+            };
+
+            bool placed = false;
+            foreach (var offset in offsets)
+            {
+                var candidateRect = new Rect(cand.AnchorPoint.X - 3.0 + offset.X, cand.AnchorPoint.Y - 2.0 + offset.Y, width, height);
+
+                if (cand.IsSelected)
+                {
+                    DrawLabel(context, cand.AnchorPoint + offset, cand.Text, true);
+                    acceptedLabelRects.Add(candidateRect);
+                    placed = true;
+                    break;
+                }
+
+                bool collides = false;
+                foreach (var r in acceptedLabelRects)
+                {
+                    if (Intersects(candidateRect, r))
+                    {
+                        collides = true;
+                        break;
+                    }
+                }
+
+                if (!collides)
+                {
+                    foreach (var r in occupiedRects)
+                    {
+                        if (Intersects(candidateRect, r))
+                        {
+                            collides = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!collides)
+                {
+                    DrawLabel(context, cand.AnchorPoint + offset, cand.Text, false);
+                    acceptedLabelRects.Add(candidateRect);
+                    placed = true;
+                    break;
+                }
+            }
+
+            if (!placed && cand.IsSelected)
+            {
+                DrawLabel(context, cand.AnchorPoint, cand.Text, true);
+            }
         }
+    }
+
+    private static bool Intersects(Rect r1, Rect r2)
+    {
+        return !(r2.Left > r1.Right || r2.Right < r1.Left || r2.Top > r1.Bottom || r2.Bottom < r1.Top);
     }
 
     private static void DrawLabel(DrawingContext context, Point point, string text, bool selected)

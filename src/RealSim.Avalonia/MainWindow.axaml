@@ -42,8 +42,13 @@
         <controls:CityMapView ViewModel="{Binding Map}" />
       </Border>
 
-      <ScrollViewer Grid.Column="1" Background="#F7F8FA">
+      <ScrollViewer Grid.Column="1" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
         <StackPanel Margin="12" Spacing="12">
+          <StackPanel.Styles>
+            <Style Selector="CheckBox">
+              <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseHighBrush}" />
+            </Style>
+          </StackPanel.Styles>
           <TextBlock Text="Layers" FontWeight="SemiBold" FontSize="16" />
           <WrapPanel>
             <CheckBox Content="Roads" IsChecked="{Binding Map.ShowRoads}" Margin="0,0,10,4" />
