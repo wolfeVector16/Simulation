@@ -385,13 +385,39 @@ public sealed class CityMapView : Control
     private void DrawMovingEntities(DrawingContext context, MapViewModel viewModel)
     {
         var now = DateTime.UtcNow;
-        foreach (var entity in viewModel.MovingEntities.Where(viewModel.IsMovingEntityVisible).OrderBy(entity => entity.Id))
+        var visibleEntities = viewModel.MovingEntities.Where(viewModel.IsMovingEntityVisible).OrderBy(entity => entity.Id).ToArray();
+        if (viewModel.ShowRoutes)
+        {
+            foreach (var entity in visibleEntities.Where(entity => entity.RoutePolyline.Count >= 2))
+            {
+                var selected = entity == viewModel.SelectedMovingEntity;
+                var routePen = new Pen(
+                    new SolidColorBrush(Color.Parse(selected ? "#FFD60AAA" : RouteTrailStroke(entity.Kind))),
+                    selected ? 3.2 : 1.3);
+                DrawPolyline(context, viewModel, entity.RoutePolyline, routePen, MapLineStyle.Solid);
+            }
+        }
+
+        foreach (var entity in visibleEntities)
         {
             var position = MapToScreen(viewModel, entity.Interpolate(now));
             var selected = entity == viewModel.SelectedMovingEntity;
             var fill = new SolidColorBrush(Color.Parse(selected ? "#FFF3B0" : MovingFill(entity.Kind)));
             var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFD60A" : MovingStroke(entity.Kind))), selected ? 3.0 : 1.4);
             DrawSymbol(context, MovingSymbol(entity.Kind), position, MovingRadius(entity.Kind) * Math.Sqrt(viewModel.Zoom), fill, pen, selected);
+
+            if (entity.IsDelayedOrBlocked)
+            {
+                var markerCenter = position + new Point(0, -MovingRadius(entity.Kind) * Math.Sqrt(viewModel.Zoom) - 8.0);
+                DrawSymbol(
+                    context,
+                    MapSymbol.Warning,
+                    markerCenter,
+                    5.5 * Math.Sqrt(viewModel.Zoom),
+                    new SolidColorBrush(Color.Parse("#FFD166")),
+                    new Pen(new SolidColorBrush(Color.Parse("#2B1700")), 1.2),
+                    false);
+            }
         }
     }
 
@@ -492,6 +518,18 @@ public sealed class CityMapView : Control
             MovingEntityKind.Bus => "#3C096C",
             MovingEntityKind.EmergencyVehicle => "#7D102D",
             _ => "#073B4C"
+        };
+    }
+
+    private static string RouteTrailStroke(MovingEntityKind kind)
+    {
+        return kind switch
+        {
+            MovingEntityKind.Pedestrian or MovingEntityKind.Bike => "#00A89688",
+            MovingEntityKind.Bus => "#8338EC88",
+            MovingEntityKind.FreightTruck => "#7F553988",
+            MovingEntityKind.EmergencyVehicle => "#EF476F88",
+            _ => "#118AB288"
         };
     }
 

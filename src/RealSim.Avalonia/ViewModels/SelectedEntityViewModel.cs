@@ -21,7 +21,7 @@ public sealed partial class SelectedEntityViewModel : ObservableObject
         if (primitive is null)
         {
             Title = "Nothing selected";
-            Subtitle = "Click the map to inspect roads, parcels, institutions, and households.";
+            Subtitle = "Click the map to inspect roads, parcels, institutions, households, and movement.";
             return;
         }
 
@@ -50,7 +50,12 @@ public sealed partial class SelectedEntityViewModel : ObservableObject
         Title = entity.DisplayName;
         Subtitle = $"{ReadableText(entity.Kind.ToString())}  {entity.Id}";
         Details.Add($"Mode: {entity.Mode}");
+        Details.Add($"Origin: {entity.Origin}");
+        Details.Add($"Destination: {entity.DestinationName}");
         Details.Add($"Purpose: {entity.Purpose}");
+        Details.Add($"ETA: {entity.Eta}");
+        Details.Add($"Speed: {entity.SpeedKph:0.0} kph");
+        Details.Add($"Delay: {entity.DelaySeconds}s");
         Details.Add($"Status: {entity.Status}");
         Details.Add($"Progress: {entity.Progress:P0}");
         Details.Add($"Route points: {entity.RoutePolyline.Count}");

@@ -49,8 +49,10 @@
             <CheckBox Content="Roads" IsChecked="{Binding Map.ShowRoads}" Margin="0,0,10,4" />
             <CheckBox Content="Buildings" IsChecked="{Binding Map.ShowBuildings}" Margin="0,0,10,4" />
             <CheckBox Content="Transit" IsChecked="{Binding Map.ShowTransit}" Margin="0,0,10,4" />
-            <CheckBox Content="Sims" IsChecked="{Binding Map.ShowSims}" Margin="0,0,10,4" />
             <CheckBox Content="Vehicles" IsChecked="{Binding Map.ShowVehicles}" Margin="0,0,10,4" />
+            <CheckBox Content="Pedestrians" IsChecked="{Binding Map.ShowPedestrians}" Margin="0,0,10,4" />
+            <CheckBox Content="Routes/trails" IsChecked="{Binding Map.ShowRoutes}" Margin="0,0,10,4" />
+            <CheckBox Content="Traffic" IsChecked="{Binding Map.ShowTraffic}" Margin="0,0,10,4" />
             <CheckBox Content="Events" IsChecked="{Binding Map.ShowEvents}" Margin="0,0,10,4" />
             <CheckBox Content="Labels" IsChecked="{Binding Map.ShowLabels}" Margin="0,0,10,4" />
           </WrapPanel>
@@ -75,6 +77,10 @@
           <TextBlock Text="Selected" FontWeight="SemiBold" FontSize="16" />
           <TextBlock Text="{Binding SelectedEntity.Title}" FontWeight="SemiBold" />
           <TextBlock Text="{Binding SelectedEntity.Subtitle}" TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Follow selected" Command="{Binding Map.FollowSelectedMovementCommand}" />
+            <Button Content="Stop following" Command="{Binding Map.StopFollowingCommand}" />
+          </StackPanel>
           <ItemsControl ItemsSource="{Binding SelectedEntity.Details}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="sys:String">

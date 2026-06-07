@@ -1,12 +1,33 @@
 namespace RealSim.Tests
 
+open System
 open Xunit
+open Simulation
 open Simulation.Domain
 open RealSim.Avalonia.Models
 open RealSim.Avalonia.Services
 open RealSim.Avalonia.ViewModels
 
 module AvaloniaViewerTests =
+    let private activeMovementWorld () =
+        [ 1..96 ]
+        |> Seq.scan (fun world _ -> TestWorld.tick 15 world) (TestWorld.create ())
+        |> Seq.find (fun world -> not world.Transport.Movements.IsEmpty && (MapProjection.Project world).MovingEntities.Count > 0)
+
+    let private withPedestrianMovement world =
+        let movement = world.Transport.Movements |> Map.toSeq |> Seq.map snd |> Seq.head
+        let simId = world.Sims |> Map.toSeq |> Seq.head |> fst
+        let pedestrian =
+            { movement with
+                Kind = Simulation.Domain.MovingEntityKind.Pedestrian simId
+                CurrentSpeedKph = 4.5
+                Status = Simulation.Domain.MovementStatus.InProgress }
+
+        { world with
+            Transport =
+                { world.Transport with
+                    Movements = [ movement.Id, pedestrian ] |> Map.ofList } }
+
     let private primitiveSignature (projection: MapProjectionResult) =
         projection.Primitives
         |> Seq.map (fun primitive ->
@@ -98,6 +119,66 @@ module AvaloniaViewerTests =
 
         Assert.Equal(5.0, midpoint.X, 3)
         Assert.Equal(10.0, midpoint.Y, 3)
+
+    [<Fact>]
+    let ``MapProjectionEmitsMovingVehiclePrimitive`` () =
+        let projection = activeMovementWorld () |> MapProjection.Project
+
+        Assert.Contains(projection.Primitives, fun primitive ->
+            primitive.Kind = MapPrimitiveKind.MovingEntity && primitive.Symbol = MapSymbol.Vehicle)
+        Assert.NotEmpty(projection.MovingEntities)
+
+    [<Fact>]
+    let ``MapProjectionEmitsPedestrianPrimitive`` () =
+        let projection = activeMovementWorld () |> withPedestrianMovement |> MapProjection.Project
+
+        Assert.Contains(projection.MovingEntities, fun entity -> entity.Kind = RealSim.Avalonia.Models.MovingEntityKind.Pedestrian)
+        Assert.Contains(projection.Primitives, fun primitive ->
+            primitive.Kind = MapPrimitiveKind.MovingEntity && primitive.Category = "Pedestrian")
+
+    [<Fact>]
+    let ``SelectedMovementHasDetails`` () =
+        let projection = activeMovementWorld () |> MapProjection.Project
+        let map = MapViewModel()
+        let details = SelectedEntityViewModel()
+        map.Update projection
+        let entity = map.MovingEntities |> Seq.head
+
+        map.SelectMovingEntity entity
+        details.Show map.SelectedMovingEntity
+
+        Assert.Equal(entity.DisplayName, details.Title)
+        Assert.Contains(details.Details, fun detail -> detail.StartsWith("Mode:"))
+        Assert.Contains(details.Details, fun detail -> detail.StartsWith("Origin:"))
+        Assert.Contains(details.Details, fun detail -> detail.StartsWith("Destination:"))
+        Assert.Contains(details.Details, fun detail -> detail.StartsWith("ETA:"))
+        Assert.Contains(details.Details, fun detail -> detail.StartsWith("Speed:"))
+        Assert.Contains(details.Details, fun detail -> detail.StartsWith("Delay:"))
+
+    [<Fact>]
+    let ``FollowSelectedMovementUsesCurrentPosition`` () =
+        let projection = activeMovementWorld () |> MapProjection.Project
+        let map = MapViewModel()
+        map.Update projection
+        let entity = map.MovingEntities |> Seq.head
+        map.SelectMovingEntity entity
+        map.FollowSelectedMovement()
+
+        Assert.True(map.IsFollowingSelectedMovement)
+        Assert.Equal(500.0 - entity.CurrentPosition.X * map.Zoom, map.PanX, 6)
+        Assert.Equal(350.0 - entity.CurrentPosition.Y * map.Zoom, map.PanY, 6)
+
+    [<Fact>]
+    let ``LayerToggleHidesMovementLayer`` () =
+        let projection = activeMovementWorld () |> MapProjection.Project
+        let map = MapViewModel()
+        map.Update projection
+        let vehicle = map.MovingEntities |> Seq.find (fun entity -> entity.Kind = RealSim.Avalonia.Models.MovingEntityKind.PrivateVehicle)
+
+        Assert.True(map.IsMovingEntityVisible vehicle)
+        map.ShowVehicles <- false
+
+        Assert.False(map.IsMovingEntityVisible vehicle)
 
     [<Fact>]
     let ``SelectionUpdatesDetails`` () =

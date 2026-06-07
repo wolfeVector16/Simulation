@@ -53,10 +53,12 @@
     <Compile Include="WorldIndexTypes.fs" />
     <Compile Include="WorldState.fs" />
     <Compile Include="MapGraph.fs" />
+    <Compile Include="TransportRouting.fs" />
     <Compile Include="Economy.fs" />
     <Compile Include="CitySystems.fs" />
     <Compile Include="LifeSim.fs" />
     <Compile Include="Diagnostics.fs" />
+    <Compile Include="MovementSystem.fs" />
     <Compile Include="Transport.fs" />
     <Compile Include="WorldIndexes.fs" />
     <Compile Include="WorldGeneration.fs" />

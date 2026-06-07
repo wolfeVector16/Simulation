@@ -171,7 +171,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         TransportSummary.Update(CreateTransportSummary(world));
         RefreshNeighborhoods(world);
         RefreshEvents();
-        SelectedEntity.Show(Map.SelectedPrimitive);
+        if (Map.SelectedMovingEntity is not null)
+        {
+            SelectedEntity.Show(Map.SelectedMovingEntity);
+        }
+        else
+        {
+            SelectedEntity.Show(Map.SelectedPrimitive);
+        }
     }
 
     private void RefreshEvents()

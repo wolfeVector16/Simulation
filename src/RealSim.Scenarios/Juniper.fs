@@ -1468,6 +1468,7 @@ module Juniper =
               TransitRoutes = transitRoutes
               ParkingZones = parkingZones
               Trips = Map.empty
+              Movements = Map.empty
               Vehicles = Map.empty
               Incidents = Map.empty
               AccessByNeighborhood =

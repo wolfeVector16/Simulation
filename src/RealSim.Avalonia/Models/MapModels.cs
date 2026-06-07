@@ -106,6 +106,11 @@ public sealed record MovingEntityProjection(
     string Mode,
     string Purpose,
     string Status,
+    string Origin,
+    string DestinationName,
+    string Eta,
+    double SpeedKph,
+    int DelaySeconds,
     bool IsApproximate);
 
 public sealed record MapProjectionResult(

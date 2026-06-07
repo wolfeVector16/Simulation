@@ -46,8 +46,10 @@ public static class MapProjection
         primitives.AddRange(ProjectInstitutions(world, places, project));
         primitives.AddRange(ProjectHouseholds(world, places, project));
 
-        var movingEntities = ProjectMovingEntities(world, places, roadNodes, roadSegments, project).ToArray();
+        var trafficFrame = Simulation.TrafficVisualization.getTrafficFrame(world);
+        var movingEntities = ProjectMovingEntities(world, trafficFrame, places, roadNodes, project).ToArray();
         primitives.AddRange(ProjectActiveRoutes(movingEntities));
+        primitives.AddRange(ProjectMovingEntityPrimitives(movingEntities));
         primitives.AddRange(ProjectEventMarkers(world, places, roadNodes, roadSegments, neighborhoodCenters, project));
 
         return new MapProjectionResult(
@@ -391,49 +393,93 @@ public static class MapProjection
 
     private static IEnumerable<MovingEntityProjection> ProjectMovingEntities(
         SimDomain.World world,
+        SimDomain.TrafficFrame trafficFrame,
         IReadOnlyDictionary<SimDomain.PlaceId, SimDomain.Place> places,
         IReadOnlyDictionary<SimDomain.RoadNodeId, SimDomain.RoadNode> roadNodes,
-        IReadOnlyDictionary<SimDomain.RoadSegmentId, SimDomain.RoadSegment> roadSegments,
         Func<SimDomain.Coordinates, MapPoint> project)
     {
         var sims = FSharpInterop.Pairs(world.Sims).ToDictionary(item => item.Key, item => item.Value);
-        var vehiclesByTrip = FSharpInterop.Pairs(world.Transport.Vehicles).ToLookup(item => item.Value.Trip, item => item.Value);
-        var activeTrips = FSharpInterop.Pairs(world.Transport.Trips)
-            .Where(item => IsUnionCase(item.Value.Status, "InProgress"))
-            .OrderBy(item => item.Key.ToString())
+        var trips = FSharpInterop.Pairs(world.Transport.Trips).ToDictionary(item => item.Key, item => item.Value);
+        var entities = trafficFrame.MovingEntities
+            .OrderBy(entity => entity.MovementId.ToString())
             .Take(MaxMovingEntities)
             .ToArray();
 
-        foreach (var item in activeTrips)
+        foreach (var entity in entities)
         {
-            var trip = item.Value;
-            var route = trip.CurrentRoute?.Value ?? trip.PlannedRoute?.Value;
-            var routePolyline = CreateRoutePolyline(trip, route, places, roadNodes, roadSegments, project, out var approximate);
-            if (routePolyline.Count < 2)
+            var routePolyline = entity.RoutePreview
+                .Select(project)
+                .ToArray();
+
+            if (routePolyline.Length < 2)
             {
                 continue;
             }
 
-            var progress = ProgressFromTrip(world, trip);
-            var position = PointAlongPolyline(routePolyline, progress);
-            var mode = trip.ChosenMode is null ? route?.Mode.ToString() ?? "Trip" : trip.ChosenMode.Value.ToString();
-            var personName = trip.PersonId is not null && sims.TryGetValue(trip.PersonId.Value, out var sim) ? sim.Name : "Trip";
-            var vehicle = vehiclesByTrip[item.Key].FirstOrDefault();
-            var kind = MovingKind(mode, vehicle is not null);
-            var detailsStatus = trip.Stress >= 0.72 ? "delayed/stressed" : "in progress";
+            var mode = entity.Mode.ToString();
+            var kind = MovingKindFromFrame(entity.EntityKind, mode);
+            var purpose = "Trip";
+            var origin = "Origin";
+            var destination = "Destination";
+            if (trips.TryGetValue(entity.TripId, out var trip))
+            {
+                purpose = Readable(trip.Purpose.ToString());
+                origin = LocationLabel(trip.Origin, places, roadNodes);
+                destination = LocationLabel(trip.Destination, places, roadNodes);
+            }
+            var eta = FormatSimTime(entity.TripId, world, entity.Progress, trips);
+
+            var displayName = "Movement";
+            if (TryOptionValue<SimDomain.SimId>(entity.SimId, out var simId) && sims.TryGetValue(simId, out var sim))
+            {
+                displayName = sim.Name;
+            }
+            else if (TryOptionValue<SimDomain.VehicleId>(entity.VehicleId, out var vehicleId))
+            {
+                displayName = vehicleId.ToString();
+            }
 
             yield return new MovingEntityProjection(
-                Id: item.Key.ToString(),
+                Id: entity.MovementId.ToString(),
                 Kind: kind,
-                CurrentPosition: position,
+                CurrentPosition: project(entity.CurrentPosition),
                 Destination: routePolyline[^1],
                 RoutePolyline: routePolyline,
-                Progress: progress,
-                DisplayName: $"{personName} - {Readable(mode)}",
+                Progress: entity.Progress,
+                DisplayName: $"{displayName} - {Readable(mode)}",
                 Mode: Readable(mode),
-                Purpose: Readable(trip.Purpose.ToString()),
-                Status: detailsStatus,
-                IsApproximate: approximate);
+                Purpose: purpose,
+                Status: Readable(entity.Status.ToString()),
+                Origin: origin,
+                DestinationName: destination,
+                Eta: eta,
+                SpeedKph: entity.SpeedKph,
+                DelaySeconds: entity.DelaySeconds,
+                IsApproximate: false);
+        }
+    }
+
+    private static IEnumerable<MapPrimitive> ProjectMovingEntityPrimitives(IEnumerable<MovingEntityProjection> movingEntities)
+    {
+        foreach (var entity in movingEntities)
+        {
+            yield return new MapPrimitive(
+                Id: entity.Id,
+                Kind: MapPrimitiveKind.MovingEntity,
+                Name: entity.DisplayName,
+                Points: new[] { entity.CurrentPosition },
+                Fill: MovingFill(entity.Kind, entity.Status),
+                Stroke: MovingStroke(entity.Kind, entity.Status),
+                Thickness: entity.Status.Contains("Blocked", StringComparison.OrdinalIgnoreCase) ||
+                           entity.Status.Contains("Delayed", StringComparison.OrdinalIgnoreCase)
+                    ? 2.4
+                    : 1.3,
+                Radius: MovingRadius(entity.Kind),
+                Details: $"mode={entity.Mode}, purpose={entity.Purpose}, speed={entity.SpeedKph:0.0} kph, delay={entity.DelaySeconds}s, status={entity.Status}",
+                Category: entity.Kind.ToString(),
+                Symbol: MovingSymbol(entity.Kind),
+                LabelMinZoom: 2.1,
+                LabelPriority: 25);
         }
     }
 
@@ -515,72 +561,6 @@ public static class MapProjection
         }
     }
 
-    private static IReadOnlyList<MapPoint> CreateRoutePolyline(
-        SimDomain.TransportTrip trip,
-        SimDomain.TransportRoute? route,
-        IReadOnlyDictionary<SimDomain.PlaceId, SimDomain.Place> places,
-        IReadOnlyDictionary<SimDomain.RoadNodeId, SimDomain.RoadNode> roadNodes,
-        IReadOnlyDictionary<SimDomain.RoadSegmentId, SimDomain.RoadSegment> roadSegments,
-        Func<SimDomain.Coordinates, MapPoint> project,
-        out bool approximate)
-    {
-        var points = new List<MapPoint>();
-        approximate = true;
-
-        if (route is not null)
-        {
-            foreach (var segmentId in route.SegmentIds)
-            {
-                if (!roadSegments.TryGetValue(segmentId, out var segment))
-                {
-                    continue;
-                }
-
-                if (roadNodes.TryGetValue(segment.From, out var from) && roadNodes.TryGetValue(segment.To, out var to))
-                {
-                    AddRoutePoint(points, project(from.Position));
-                    AddRoutePoint(points, project(to.Position));
-                }
-            }
-
-            approximate = points.Count < 2 || route.SegmentIds.Length == 0;
-        }
-
-        if (points.Count < 2)
-        {
-            points.Clear();
-            if (TryLocationPoint(trip.Origin, places, roadNodes, project, out var origin) &&
-                TryLocationPoint(trip.Destination, places, roadNodes, project, out var destination))
-            {
-                points.Add(origin);
-                points.Add(destination);
-            }
-        }
-
-        return points;
-    }
-
-    private static double ProgressFromTrip(SimDomain.World world, SimDomain.TransportTrip trip)
-    {
-        if (trip.PersonId is null)
-        {
-            return 0.50;
-        }
-
-        if (!FSharpInterop.Pairs(world.Sims).ToDictionary(item => item.Key, item => item.Value).TryGetValue(trip.PersonId.Value, out var sim))
-        {
-            return 0.50;
-        }
-
-        if (!TryUnionFields(sim.Location, "InTransit", out var fields) || fields.Length == 0 || fields[0] is not SimDomain.Trip simpleTrip)
-        {
-            return 0.50;
-        }
-
-        var total = Math.Max(1, simpleTrip.TotalMinutes);
-        return Math.Clamp(1.0 - (double)Math.Max(0, simpleTrip.RemainingMinutes) / total, 0.05, 0.98);
-    }
-
     private static bool TryLocationPoint(
         object locationRef,
         IReadOnlyDictionary<SimDomain.PlaceId, SimDomain.Place> places,
@@ -603,6 +583,63 @@ public static class MapProjection
         }
 
         return false;
+    }
+
+    private static string LocationLabel(
+        object locationRef,
+        IReadOnlyDictionary<SimDomain.PlaceId, SimDomain.Place> places,
+        IReadOnlyDictionary<SimDomain.RoadNodeId, SimDomain.RoadNode> roadNodes)
+    {
+        var (caseName, fields) = UnionCase(locationRef);
+        if (caseName == "PlaceRef" && fields.Length > 0 && fields[0] is SimDomain.PlaceId placeId)
+        {
+            return places.TryGetValue(placeId, out var place) ? place.Name : placeId.ToString();
+        }
+
+        if (caseName == "NodeRef" && fields.Length > 0 && fields[0] is SimDomain.RoadNodeId nodeId)
+        {
+            return roadNodes.ContainsKey(nodeId) ? $"Road node {nodeId}" : nodeId.ToString();
+        }
+
+        if (caseName == "StopRef" && fields.Length > 0)
+        {
+            return $"Stop {fields[0]}";
+        }
+
+        if (caseName == "ParkingRef" && fields.Length > 0)
+        {
+            return $"Parking {fields[0]}";
+        }
+
+        return Readable(caseName);
+    }
+
+    private static string FormatSimTime(
+        SimDomain.TransportTripId tripId,
+        SimDomain.World world,
+        double progress,
+        IReadOnlyDictionary<SimDomain.TransportTripId, SimDomain.TransportTrip> trips)
+    {
+        if (!trips.TryGetValue(tripId, out var trip))
+        {
+            return "n/a";
+        }
+
+        var route = trip.CurrentRoute?.Value ?? trip.PlannedRoute?.Value;
+        if (route is null)
+        {
+            return "n/a";
+        }
+
+        var remaining = Math.Max(0.0, 1.0 - Math.Clamp(progress, 0.0, 1.0));
+        var etaMinute = world.MinuteOfDay + (int)Math.Ceiling(route.ExpectedMinutes * remaining);
+        var dayOffset = etaMinute / 1440;
+        var minuteOfDay = ((etaMinute % 1440) + 1440) % 1440;
+        var hour = minuteOfDay / 60;
+        var minute = minuteOfDay % 60;
+        return dayOffset == 0
+            ? $"{hour:00}:{minute:00}"
+            : $"day {world.Day + dayOffset}, {hour:00}:{minute:00}";
     }
 
     private static bool TryEventLocation(
@@ -862,51 +899,6 @@ public static class MapProjection
                 return new MapPoint(center.X + Math.Cos(angle) * width / 2.0, center.Y + Math.Sin(angle) * height / 2.0);
             })
             .ToArray();
-    }
-
-    private static void AddRoutePoint(List<MapPoint> points, MapPoint point)
-    {
-        if (points.Count == 0 || Distance(points[^1], point) > 0.25)
-        {
-            points.Add(point);
-        }
-    }
-
-    private static MapPoint PointAlongPolyline(IReadOnlyList<MapPoint> points, double progress)
-    {
-        if (points.Count == 0)
-        {
-            return default;
-        }
-
-        if (points.Count == 1)
-        {
-            return points[0];
-        }
-
-        var totalLength = 0.0;
-        for (var i = 0; i < points.Count - 1; i++)
-        {
-            totalLength += Distance(points[i], points[i + 1]);
-        }
-
-        var target = totalLength * Math.Clamp(progress, 0.0, 1.0);
-        var walked = 0.0;
-        for (var i = 0; i < points.Count - 1; i++)
-        {
-            var segmentLength = Distance(points[i], points[i + 1]);
-            if (walked + segmentLength >= target)
-            {
-                var t = segmentLength <= 0.0001 ? 0.0 : (target - walked) / segmentLength;
-                return new MapPoint(
-                    points[i].X + (points[i + 1].X - points[i].X) * t,
-                    points[i].Y + (points[i + 1].Y - points[i].Y) * t);
-            }
-
-            walked += segmentLength;
-        }
-
-        return points[^1];
     }
 
     private static MapPoint OffsetForId(MapPoint point, string id, double radius)
@@ -1275,19 +1267,120 @@ public static class MapProjection
                 : "#EF476F";
     }
 
-    private static MovingEntityKind MovingKind(string mode, bool hasVehicle)
+    private static MovingEntityKind MovingKindFromFrame(object entityKind, string mode)
     {
+        var caseName = UnionCaseName(entityKind);
+        var kindText = entityKind.ToString() ?? caseName;
+        if (caseName == "Pedestrian" || kindText.Contains("Pedestrian", StringComparison.OrdinalIgnoreCase))
+        {
+            return MovingEntityKind.Pedestrian;
+        }
+
+        if (caseName == "Cyclist" || kindText.Contains("Cyclist", StringComparison.OrdinalIgnoreCase))
+        {
+            return MovingEntityKind.Bike;
+        }
+
+        if (caseName == "TransitVehicle" || kindText.Contains("TransitVehicle", StringComparison.OrdinalIgnoreCase))
+        {
+            return MovingEntityKind.Bus;
+        }
+
+        if (caseName == "EmergencyResponder" || kindText.Contains("EmergencyResponder", StringComparison.OrdinalIgnoreCase))
+        {
+            return MovingEntityKind.EmergencyVehicle;
+        }
+
+        if (caseName == "FreightVehicle" || kindText.Contains("FreightVehicle", StringComparison.OrdinalIgnoreCase))
+        {
+            return MovingEntityKind.FreightTruck;
+        }
+
+        if (caseName == "ServiceVehicle" || kindText.Contains("ServiceVehicle", StringComparison.OrdinalIgnoreCase))
+        {
+            return MovingEntityKind.ServiceVehicle;
+        }
+
         return mode switch
         {
-            "Walk" => MovingEntityKind.Pedestrian,
-            "Bike" => MovingEntityKind.Bike,
             "Bus" or "Tram" or "Metro" or "RegionalRail" or "SchoolBus" or "Paratransit" => MovingEntityKind.Bus,
             "FreightTruck" => MovingEntityKind.FreightTruck,
             "EmergencyVehicle" => MovingEntityKind.EmergencyVehicle,
             "ServiceVehicle" => MovingEntityKind.ServiceVehicle,
             "DeliveryVehicle" => MovingEntityKind.DeliveryVehicle,
             "PrivateCar" or "TaxiOrRideshare" => MovingEntityKind.PrivateVehicle,
-            _ => hasVehicle ? MovingEntityKind.PrivateVehicle : MovingEntityKind.Sim
+            _ => MovingEntityKind.PrivateVehicle
+        };
+    }
+
+    private static string MovingFill(MovingEntityKind kind, string status)
+    {
+        if (status.Contains("Blocked", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "#EF476F";
+        }
+
+        if (status.Contains("Delayed", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Waiting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "#FFD166";
+        }
+
+        return kind switch
+        {
+            MovingEntityKind.Pedestrian => "#FFFFFF",
+            MovingEntityKind.Bike => "#06D6A0",
+            MovingEntityKind.Bus => "#8338EC",
+            MovingEntityKind.FreightTruck => "#7F5539",
+            MovingEntityKind.EmergencyVehicle => "#EF476F",
+            MovingEntityKind.ServiceVehicle or MovingEntityKind.DeliveryVehicle => "#F4A261",
+            _ => "#118AB2"
+        };
+    }
+
+    private static string MovingStroke(MovingEntityKind kind, string status)
+    {
+        if (status.Contains("Blocked", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Delayed", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Waiting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "#2B1700";
+        }
+
+        return kind switch
+        {
+            MovingEntityKind.Pedestrian => "#111111",
+            MovingEntityKind.Bike => "#004B3A",
+            MovingEntityKind.Bus => "#3C096C",
+            MovingEntityKind.EmergencyVehicle => "#7D102D",
+            _ => "#073B4C"
+        };
+    }
+
+    private static MapSymbol MovingSymbol(MovingEntityKind kind)
+    {
+        return kind switch
+        {
+            MovingEntityKind.Pedestrian or MovingEntityKind.Sim => MapSymbol.Person,
+            MovingEntityKind.Bike => MapSymbol.Bike,
+            MovingEntityKind.Bus => MapSymbol.Bus,
+            MovingEntityKind.FreightTruck => MapSymbol.Truck,
+            MovingEntityKind.EmergencyVehicle => MapSymbol.Emergency,
+            _ => MapSymbol.Vehicle
+        };
+    }
+
+    private static double MovingRadius(MovingEntityKind kind)
+    {
+        return kind switch
+        {
+            MovingEntityKind.Bus => 7.0,
+            MovingEntityKind.FreightTruck => 7.5,
+            MovingEntityKind.EmergencyVehicle => 7.0,
+            MovingEntityKind.Pedestrian => 4.8,
+            MovingEntityKind.Bike => 5.2,
+            _ => 6.0
         };
     }
 

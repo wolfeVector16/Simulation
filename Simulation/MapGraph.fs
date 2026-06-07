@@ -23,6 +23,28 @@ module MapGraph =
           TotalMinutes: float
           UsesRoadNetwork: bool }
 
+    type RoadAccess =
+        { Node: RoadNodeId
+          AccessMeters: float }
+
+    type RoadEdge =
+        { FromNode: RoadNodeId
+          ToNode: RoadNodeId
+          Segment: RoadSegment
+          LengthMeters: float }
+
+    type RoadPathStep =
+        { FromNode: RoadNodeId
+          ToNode: RoadNodeId
+          Segment: RoadSegment
+          LengthMeters: float
+          Cost: float }
+
+    type RoadPath =
+        { TotalCost: float
+          Steps: RoadPathStep list
+          NodePath: RoadNodeId list }
+
     let private localPlaneSpeedKph = 5.0
 
     let private distanceUnits a b =
@@ -49,7 +71,7 @@ module MapGraph =
         let shortId = id.ToString("N")[0..7]
         $"road node %s{shortId}"
 
-    let private segmentLength (cityMap: CityMap) (segment: RoadSegment) =
+    let segmentLength (cityMap: CityMap) (segment: RoadSegment) =
         if segment.LengthMeters > 0.0 then
             segment.LengthMeters
         else
@@ -57,7 +79,7 @@ module MapGraph =
             | Some a, Some b -> distanceMeters cityMap a.Position b.Position
             | _ -> Double.PositiveInfinity
 
-    let private nearestRoadNode (cityMap: CityMap) position maxDistanceMeters =
+    let nearestRoadNode (cityMap: CityMap) position maxDistanceMeters =
         cityMap.RoadNodes
         |> Map.toSeq
         |> Seq.map (fun (nodeId, node) -> nodeId, distanceMeters cityMap position node.Position)
@@ -65,139 +87,176 @@ module MapGraph =
         |> Seq.sortBy snd
         |> Seq.tryHead
 
-    let private resolveAccess (cityMap: CityMap) (place: Place) =
+    let resolveRoadAccessForPlace (cityMap: CityMap) (place: Place) =
         match place.RoadAccess with
         | DirectRoadAccess nodeId ->
             cityMap.RoadNodes
             |> Map.tryFind nodeId
-            |> Option.map (fun node -> nodeId, distanceMeters cityMap place.Position node.Position)
+            |> Option.map (fun node -> { Node = nodeId; AccessMeters = distanceMeters cityMap place.Position node.Position })
         | NearestRoadAccess maxDistanceMeters ->
             nearestRoadNode cityMap place.Position maxDistanceMeters
+            |> Option.map (fun (nodeId, meters) -> { Node = nodeId; AccessMeters = meters })
         | NoRoadAccess -> None
 
-    let private adjacency (cityMap: CityMap) =
+    let resolveRoadAccess (cityMap: CityMap) placeId =
+        cityMap.Places
+        |> Map.tryFind placeId
+        |> Option.bind (fun place -> resolveRoadAccessForPlace cityMap place)
+
+    let roadAdjacency (cityMap: CityMap) =
         let addEdge fromNode edge map =
             let existing = Map.tryFind fromNode map |> Option.defaultValue []
             Map.add fromNode (edge :: existing) map
 
         ((Map.empty, cityMap.RoadSegments) ||> List.fold (fun map segment ->
             let length = segmentLength cityMap segment
-            let minutes = minutesAtSpeed segment.SpeedKph length
-            let edge = (segment.To, segment, length, minutes)
+            let edge = { FromNode = segment.From; ToNode = segment.To; Segment = segment; LengthMeters = length }
             let map = addEdge segment.From edge map
 
             if segment.IsTwoWay then
-                let reverseEdge = (segment.From, segment, length, minutes)
-                addEdge segment.To reverseEdge map
+                addEdge segment.To { edge with FromNode = segment.To; ToNode = segment.From } map
             else
                 map))
 
-    let private shortestRoadPath (cityMap: CityMap) originNode destinationNode =
-        let graph = adjacency cityMap
-        let nodes = cityMap.RoadNodes |> Map.toSeq |> Seq.map fst |> Set.ofSeq
+    let nodePathFromSteps steps =
+        match steps with
+        | [] -> []
+        | first :: _ -> first.FromNode :: (steps |> List.map _.ToNode)
+
+    let routePolyline (cityMap: CityMap) nodePath =
+        nodePath
+        |> List.choose (fun nodeId ->
+            cityMap.RoadNodes
+            |> Map.tryFind nodeId
+            |> Option.map _.Position)
+
+    let shortestRoadPathWithCost (cityMap: CityMap) originNode destinationNode edgeCost =
+        let graph = roadAdjacency cityMap
+        let segmentById = cityMap.RoadSegments |> List.map (fun segment -> segment.Id, segment) |> Map.ofList
+        let startState = originNode, None
+        let allStates =
+            seq {
+                yield startState
+
+                for nodeId in cityMap.RoadNodes |> Map.toSeq |> Seq.map fst do
+                    yield nodeId, None
+
+                    for segment in cityMap.RoadSegments do
+                        if segment.From = nodeId || segment.To = nodeId then
+                            yield nodeId, Some segment.Id
+            }
+            |> Set.ofSeq
 
         let rec loop unvisited distances previous =
             let current =
                 unvisited
-                |> Seq.choose (fun node ->
-                    distances
-                    |> Map.tryFind node
-                    |> Option.map (fun distance -> node, distance))
+                |> Seq.choose (fun state -> distances |> Map.tryFind state |> Option.map (fun distance -> state, distance))
                 |> Seq.sortBy snd
                 |> Seq.tryHead
 
             match current with
             | None -> None
-            | Some (node, _) when node = destinationNode ->
+            | Some ((node, _), _) when node = destinationNode ->
                 Some (distances, previous)
             | Some (_, distance) when Double.IsPositiveInfinity distance ->
                 None
-            | Some (node, distance) ->
-                let unvisited = Set.remove node unvisited
+            | Some ((node, previousSegmentId), distance) ->
+                let state = node, previousSegmentId
+                let unvisited = Set.remove state unvisited
+                let previousSegment = previousSegmentId |> Option.bind (fun segmentId -> Map.tryFind segmentId segmentById)
                 let edges = Map.tryFind node graph |> Option.defaultValue []
 
                 let distances, previous =
-                    ((distances, previous), edges)
-                    ||> List.fold (fun (distances, previous) (neighbor, segment, length, minutes) ->
-                        if not (Set.contains neighbor unvisited) then
+                    ((distances, previous), edges |> List.sortBy (fun edge -> edge.ToNode, edge.Segment.Id))
+                    ||> List.fold (fun (distances, previous) edge ->
+                        let nextState = edge.ToNode, Some edge.Segment.Id
+
+                        if not (Set.contains nextState unvisited) then
                             distances, previous
                         else
-                            let candidate = distance + minutes
-                            let known = Map.tryFind neighbor distances |> Option.defaultValue Double.PositiveInfinity
+                            let cost = edgeCost node previousSegment edge
+                            let candidate = distance + cost
+                            let known = Map.tryFind nextState distances |> Option.defaultValue Double.PositiveInfinity
 
                             if candidate < known then
-                                Map.add neighbor candidate distances, Map.add neighbor (node, segment, length, minutes) previous
+                                Map.add nextState candidate distances, Map.add nextState (state, edge, cost) previous
                             else
                                 distances, previous)
 
                 loop unvisited distances previous
 
-        let distances = Map.add originNode 0.0 Map.empty
+        let distances = Map.add startState 0.0 Map.empty
 
-        match loop nodes distances Map.empty with
+        match loop allStates distances Map.empty with
         | None -> None
         | Some (distances, previous) ->
-            let rec rebuild node steps =
-                if node = originNode then
+            let destinationState =
+                distances
+                |> Map.toSeq
+                |> Seq.filter (fun ((node, _), _) -> node = destinationNode)
+                |> Seq.sortBy snd
+                |> Seq.tryHead
+                |> Option.map fst
+
+            let rec rebuild state steps =
+                if state = startState then
                     Some steps
                 else
-                    match Map.tryFind node previous with
-                    | Some (prior, segment, length, minutes) ->
-                        rebuild prior ((prior, node, segment, length, minutes) :: steps)
+                    match Map.tryFind state previous with
+                    | Some (priorState, edge, cost) ->
+                        let step =
+                            { FromNode = edge.FromNode
+                              ToNode = edge.ToNode
+                              Segment = edge.Segment
+                              LengthMeters = edge.LengthMeters
+                              Cost = cost }
+
+                        rebuild priorState (step :: steps)
                     | None -> None
 
-            rebuild destinationNode []
-            |> Option.map (fun steps ->
-                let total = Map.find destinationNode distances
-                total, steps)
+            destinationState
+            |> Option.bind (fun destinationState ->
+                rebuild destinationState []
+                |> Option.map (fun steps ->
+                    { TotalCost = Map.find destinationState distances
+                      Steps = steps
+                      NodePath = nodePathFromSteps steps }))
 
-    let private directRoute (cityMap: CityMap) (origin: Place) (destination: Place) =
-        let meters = distanceMeters cityMap origin.Position destination.Position
-        let minutes = minutesAtSpeed localPlaneSpeedKph meters
-
-        { Origin = origin.Id
-          Destination = destination.Id
-          Legs =
-            [ { Mode = LocalPlane
-                FromName = origin.Name
-                ToName = destination.Name
-                Meters = meters
-                Minutes = minutes } ]
-          TotalMeters = meters
-          TotalMinutes = minutes
-          UsesRoadNetwork = false }
+    let shortestRoadPath cityMap originNode destinationNode =
+        shortestRoadPathWithCost cityMap originNode destinationNode (fun _ _ edge ->
+            minutesAtSpeed edge.Segment.SpeedKph edge.LengthMeters)
 
     let findRoute (cityMap: CityMap) originId destinationId =
         match Map.tryFind originId cityMap.Places, Map.tryFind destinationId cityMap.Places with
         | Some origin, Some destination ->
-            match resolveAccess cityMap origin, resolveAccess cityMap destination with
-            | Some (originNode, originAccessMeters), Some (destinationNode, destinationAccessMeters) ->
-                match shortestRoadPath cityMap originNode destinationNode with
-                | Some (_, roadSteps) ->
+            match resolveRoadAccessForPlace cityMap origin, resolveRoadAccessForPlace cityMap destination with
+            | Some originAccess, Some destinationAccess ->
+                match shortestRoadPath cityMap originAccess.Node destinationAccess.Node with
+                | Some roadPath ->
                     let accessLegs =
-                        [ if originAccessMeters > 0.0 then
+                        [ if originAccess.AccessMeters > 0.0 then
                               { Mode = LocalPlane
                                 FromName = origin.Name
-                                ToName = roadNodeName originNode
-                                Meters = originAccessMeters
-                                Minutes = minutesAtSpeed localPlaneSpeedKph originAccessMeters } ]
+                                ToName = roadNodeName originAccess.Node
+                                Meters = originAccess.AccessMeters
+                                Minutes = minutesAtSpeed localPlaneSpeedKph originAccess.AccessMeters } ]
 
                     let roadLegs =
-                        roadSteps
-                        |> List.map (fun (fromNode, toNode, _, length, minutes) ->
+                        roadPath.Steps
+                        |> List.map (fun step ->
                             { Mode = Road
-                              FromName = roadNodeName fromNode
-                              ToName = roadNodeName toNode
-                              Meters = length
-                              Minutes = minutes })
+                              FromName = roadNodeName step.FromNode
+                              ToName = roadNodeName step.ToNode
+                              Meters = step.LengthMeters
+                              Minutes = step.Cost })
 
                     let egressLegs =
-                        [ if destinationAccessMeters > 0.0 then
+                        [ if destinationAccess.AccessMeters > 0.0 then
                               { Mode = LocalPlane
-                                FromName = roadNodeName destinationNode
+                                FromName = roadNodeName destinationAccess.Node
                                 ToName = destination.Name
-                                Meters = destinationAccessMeters
-                                Minutes = minutesAtSpeed localPlaneSpeedKph destinationAccessMeters } ]
+                                Meters = destinationAccess.AccessMeters
+                                Minutes = minutesAtSpeed localPlaneSpeedKph destinationAccess.AccessMeters } ]
 
                     let legs = accessLegs @ roadLegs @ egressLegs
                     let totalMeters = legs |> List.sumBy _.Meters
@@ -209,9 +268,9 @@ module MapGraph =
                       TotalMeters = totalMeters
                       TotalMinutes = totalMinutes
                       UsesRoadNetwork = true }
-                | None -> directRoute cityMap origin destination
-            | _ -> directRoute cityMap origin destination
-            |> Some
+                    |> Some
+                | None -> None
+            | _ -> None
         | _ -> None
 
     let routeMinutes (cityMap: CityMap) originId destinationId =

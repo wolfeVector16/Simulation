@@ -24,6 +24,9 @@ module Transport =
     let private vehicleId seed tick label key =
         VehicleId(stableGuid [ "vehicle"; string seed; string tick; label; key ])
 
+    let private movementId seed tick label key =
+        MovementId(stableGuid [ "movement"; string seed; string tick; label; key ])
+
     let private clampInt low high value =
         value |> max low |> min high
 
@@ -49,284 +52,89 @@ module Transport =
         | Some a, Some b -> MapGraph.distanceMeters world.Map a.Position b.Position
         | _ -> Double.PositiveInfinity
 
-    let private nearestRoadNode world position maxDistanceMeters =
-        world.Map.RoadNodes
-        |> Map.toSeq
-        |> Seq.map (fun (nodeId, node) -> nodeId, MapGraph.distanceMeters world.Map position node.Position)
-        |> Seq.filter (fun (_, meters) -> meters <= maxDistanceMeters)
-        |> Seq.sortBy snd
-        |> Seq.tryHead
+    let private headingBetween a b =
+        Math.Atan2(b.Y - a.Y, b.X - a.X)
 
-    let private resolveRoadAccess world placeId =
-        match Map.tryFind placeId world.Map.Places with
-        | None -> None
-        | Some place ->
-            match place.RoadAccess with
-            | DirectRoadAccess nodeId -> Some(nodeId, 0.0)
-            | NearestRoadAccess maxMeters -> nearestRoadNode world place.Position maxMeters
-            | NoRoadAccess -> None
+    let private movementKindFor mode vehicleId simId =
+        match mode, simId with
+        | Walk, Some simId -> MovingEntityKind.Pedestrian simId
+        | Bike, Some simId -> MovingEntityKind.Cyclist simId
+        | Bus, _ | Tram, _ | Metro, _ | RegionalRail, _ | SchoolBus, _ -> MovingEntityKind.TransitVehicle(TransitVehicleId(stableGuid [ "transit-vehicle"; string vehicleId ]))
+        | EmergencyVehicle, _ -> MovingEntityKind.EmergencyResponder vehicleId
+        | FreightTruck, _ | DeliveryVehicle, _ -> MovingEntityKind.FreightVehicle vehicleId
+        | ServiceVehicle, _ -> MovingEntityKind.ServiceVehicle vehicleId
+        | _ -> MovingEntityKind.Vehicle vehicleId
 
-    let private segmentLength world (segment: RoadSegment) =
-        if segment.LengthMeters > 0.0 then
-            segment.LengthMeters
+    let private movementStatusFromVehicle =
+        function
+        | VehicleNotStarted -> MovementStatus.Planned
+        | VehicleMoving -> MovementStatus.InProgress
+        | VehicleWaitingAtIntersection -> MovementStatus.WaitingAtIntersection
+        | VehicleQueued -> MovementStatus.Queued
+        | VehicleParked
+        | VehicleCompleted -> MovementStatus.Completed
+        | VehicleCanceled -> MovementStatus.Canceled
+        | VehicleFailed -> MovementStatus.Failed
+
+    let private routeLegProgress (route: TransportRoute) legIndex distanceOnLeg =
+        let completed =
+            route.Legs
+            |> List.take (min legIndex route.Legs.Length)
+            |> List.sumBy _.DistanceMeters
+
+        if route.TotalDistanceMeters <= 0.0 then
+            0.0
         else
-            match Map.tryFind segment.From world.Map.RoadNodes, Map.tryFind segment.To world.Map.RoadNodes with
-            | Some a, Some b -> MapGraph.distanceMeters world.Map a.Position b.Position
-            | _ -> Double.PositiveInfinity
+            clamp01 ((completed + max 0.0 distanceOnLeg) / route.TotalDistanceMeters)
 
-    let private congestionFor world (segment: RoadSegment) =
-        world.Transport.SegmentCongestion
-        |> Map.tryFind segment.Id
-        |> Option.defaultValue 0.0
+    let private positionAtLegDistance (route: TransportRoute) legIndex distanceOnLeg =
+        let progress = routeLegProgress route legIndex distanceOnLeg
+        TransportRoute.interpolate progress route
+        |> Option.orElse (route.Geometry.Polyline |> List.tryHead)
+        |> Option.defaultValue { X = 0.0; Y = 0.0 }
 
-    type private DirectedRoadEdge =
-        { FromNode: RoadNodeId
-          ToNode: RoadNodeId
-          Segment: RoadSegment
-          LengthMeters: float
-          SegmentMinutes: float }
+    let private vehicleLegDistance world route (vehicle: VehicleState) =
+        match vehicle.CurrentRouteIndex, vehicle.CurrentPosition with
+        | Some index, OnRoadSegment(segmentId, _, progress) ->
+            let distance =
+                world.Map.RoadSegments
+                |> List.tryFind (fun segment -> segment.Id = segmentId)
+                |> Option.map (fun segment -> MapGraph.segmentLength world.Map segment * clamp01 progress)
+                |> Option.defaultValue 0.0
 
-    type private RoadStep =
-        { FromNode: RoadNodeId
-          ToNode: RoadNodeId
-          Segment: RoadSegment
-          LengthMeters: float
-          SegmentMinutes: int
-          IntersectionDelayMinutes: int
-          Movement: IntersectionMovement }
+            index, distance
+        | Some index, WaitingAtIntersection _ -> index, route.Legs |> List.tryItem index |> Option.map _.DistanceMeters |> Option.defaultValue 0.0
+        | _ -> 0, 0.0
 
-    let private segmentEffectiveSpeedKph world (segment: RoadSegment) =
-        let congestion = congestionFor world segment
-        segment.SpeedKph * (1.0 - min 0.75 (congestion * 0.55)) * segment.SurfaceCondition * (1.0 - segment.WeatherImpact)
+    let private createMovement (world: World) (trip: TransportTrip) (route: TransportRoute) (vehicle: VehicleState) =
+        let legIndex, distanceOnLeg = vehicleLegDistance world route vehicle
+        let currentPosition = positionAtLegDistance route legIndex distanceOnLeg
+        let nextPosition = TransportRoute.interpolate (min 1.0 (routeLegProgress route legIndex distanceOnLeg + 0.001)) route
 
-    let private segmentTravelMinutes world (segment: RoadSegment) =
-        let length = segmentLength world segment
-        let incidentPenalty =
-            if segment.CurrentIncidents.IsEmpty && not segment.UnderConstruction then 1.0
-            else 1.0 + max 0.25 (float segment.CurrentIncidents.Count * 0.35)
-
-        minutesAtSpeed (segmentEffectiveSpeedKph world segment) length |> float |> (*) incidentPenalty
-
-    let private roadAdjacency world =
-        let addEdge fromNode edge map =
-            let existing = Map.tryFind fromNode map |> Option.defaultValue []
-            Map.add fromNode (edge :: existing) map
-
-        ((Map.empty, world.Map.RoadSegments) ||> List.fold (fun map segment ->
-            let length = segmentLength world segment
-            let minutes = segmentTravelMinutes world segment
-            let edge = { FromNode = segment.From; ToNode = segment.To; Segment = segment; LengthMeters = length; SegmentMinutes = minutes }
-            let map = addEdge segment.From edge map
-
-            if segment.IsTwoWay then
-                addEdge segment.To { edge with FromNode = segment.To; ToNode = segment.From } map
-            else
-                map))
-
-    let private nodePosition world nodeId =
-        world.Map.RoadNodes
-        |> Map.tryFind nodeId
-        |> Option.map _.Position
-
-    let private vectorIntoNode world nodeId (segment: RoadSegment) =
-        match nodePosition world nodeId with
-        | None -> None
-        | Some node ->
-            let other =
-                if segment.To = nodeId then
-                    nodePosition world segment.From
-                elif segment.From = nodeId then
-                    nodePosition world segment.To
-                else
-                    None
-
-            other |> Option.map (fun other -> node.X - other.X, node.Y - other.Y)
-
-    let private vectorOutOfNode world nodeId (segment: RoadSegment) =
-        match nodePosition world nodeId with
-        | None -> None
-        | Some node ->
-            let other =
-                if segment.From = nodeId then
-                    nodePosition world segment.To
-                elif segment.To = nodeId && segment.IsTwoWay then
-                    nodePosition world segment.From
-                else
-                    None
-
-            other |> Option.map (fun other -> other.X - node.X, other.Y - node.Y)
+        { Id = movementId world.Meta.Seed world.Meta.Tick "movement" (string trip.Id)
+          Kind = movementKindFor route.Mode vehicle.Id trip.PersonId
+          TripId = trip.Id
+          RouteId = route.Id
+          Route = route
+          CurrentLegIndex = legIndex
+          DistanceOnLegMeters = distanceOnLeg
+          TotalDistanceMeters = route.TotalDistanceMeters
+          Progress = routeLegProgress route legIndex distanceOnLeg
+          CurrentPosition = currentPosition
+          PreviousPosition = None
+          HeadingRadians = nextPosition |> Option.map (fun position -> headingBetween currentPosition position)
+          CurrentSpeedKph = vehicle.CurrentSpeedKph
+          Status = movementStatusFromVehicle vehicle.Status
+          StartedAt = { Day = world.Day; MinuteOfDay = world.MinuteOfDay }
+          ExpectedArrival = { Day = world.Day; MinuteOfDay = normalizeMinute (world.MinuteOfDay + route.ExpectedMinutes) }
+          DelaySeconds = vehicle.DelayMinutes * 60
+          Occupants = vehicle.Occupants }
 
     let classifyIntersectionMovement world nodeId (previousSegment: RoadSegment option) (nextSegment: RoadSegment) =
-        match previousSegment with
-        | None -> Straight
-        | Some previous when previous.Id = nextSegment.Id -> UTurnMovement
-        | Some previous ->
-            match vectorIntoNode world nodeId previous, vectorOutOfNode world nodeId nextSegment with
-            | Some (ax, ay), Some (bx, by) ->
-                let dot = ax * bx + ay * by
-                let cross = ax * by - ay * bx
-                let angle = Math.Atan2(cross, dot)
-                let absAngle = abs angle
-
-                if absAngle < Math.PI / 7.0 then Straight
-                elif absAngle > Math.PI * 0.78 then UTurnMovement
-                elif cross > 0.0 then LeftTurnMovement
-                else RightTurnMovement
-            | _ ->
-                if previous.Name = nextSegment.Name then Straight else UnknownMovement
+        TransportRouting.classifyIntersectionMovement world nodeId previousSegment nextSegment
 
     let intersectionDelayMinutes world mode nodeId previousSegment nextSegment =
-        match world.Transport.Intersections |> Map.tryFind nodeId with
-        | None -> 0
-        | Some intersection ->
-            let movement = classifyIntersectionMovement world nodeId previousSegment nextSegment
-            let controlSeconds =
-                match intersection.Control with
-                | Uncontrolled -> 12.0
-                | Yield -> 35.0
-                | StopSign -> 75.0
-                | AllWayStop -> 110.0
-                | Signalized _ -> 150.0
-                | AdaptiveSignal -> 120.0
-                | Roundabout -> 80.0
-                | RampMeter -> 210.0
-                | RailroadCrossing -> 240.0
-                | PedestrianCrossing -> 90.0
-                | TransitPrioritySignal -> 70.0
-
-            let movementSeconds =
-                match movement with
-                | Straight -> 0.0
-                | RightTurnMovement -> 18.0
-                | LeftTurnMovement -> 70.0
-                | UTurnMovement -> 120.0
-                | MergeMovement
-                | DivergeMovement -> 35.0
-                | UnknownMovement -> 55.0
-
-            let modeSeconds =
-                match mode with
-                | Bus when intersection.SignalPhases |> List.exists (fun phase -> phase.Kind = TransitPriorityPhase) -> -55.0
-                | EmergencyVehicle when intersection.SignalPhases |> List.exists (fun phase -> phase.Kind = EmergencyPreemptionPhase) -> -80.0
-                | Bike -> max 0.0 ((1.0 - intersection.BikeCrossingQuality) * 45.0)
-                | Walk -> max 0.0 ((1.0 - intersection.CrosswalkQuality) * 55.0)
-                | _ -> 0.0
-
-            let congestionSeconds =
-                let incomingQueue =
-                    intersection.IncomingLanes
-                    |> Seq.choose (fun laneId -> world.Transport.Lanes |> Map.tryFind laneId)
-                    |> Seq.map (fun lane -> float lane.QueueLength)
-                    |> Seq.append [ 0.0 ]
-                    |> Seq.average
-
-                incomingQueue * 3.0 + intersection.QueueSpillbackRisk * 45.0 + intersection.MergeDifficulty * 25.0
-
-            int (Math.Ceiling(max 0.0 (controlSeconds + movementSeconds + modeSeconds + congestionSeconds) / 60.0))
-
-    let private roadRoute world mode origin destination =
-        match resolveRoadAccess world origin, resolveRoadAccess world destination with
-        | Some (originNode, originAccess), Some (destinationNode, destinationAccess) ->
-            let graph = roadAdjacency world
-            let segmentById = world.Map.RoadSegments |> List.map (fun segment -> segment.Id, segment) |> Map.ofList
-            let startState = originNode, None
-            let allStates =
-                seq {
-                    yield startState
-
-                    for nodeId in world.Map.RoadNodes |> Map.toSeq |> Seq.map fst do
-                        yield nodeId, None
-
-                        for segment in world.Map.RoadSegments do
-                            if segment.From = nodeId || segment.To = nodeId then
-                                yield nodeId, Some segment.Id
-                }
-                |> Set.ofSeq
-
-            let rec loop unvisited distances previous =
-                let current =
-                    unvisited
-                    |> Seq.choose (fun state -> distances |> Map.tryFind state |> Option.map (fun distance -> state, distance))
-                    |> Seq.sortBy snd
-                    |> Seq.tryHead
-
-                match current with
-                | None -> None
-                | Some ((node, _), _) when node = destinationNode -> Some(distances, previous)
-                | Some (_, distance) when Double.IsPositiveInfinity distance -> None
-                | Some ((node, previousSegmentId), distance) ->
-                    let state = node, previousSegmentId
-                    let unvisited = Set.remove state unvisited
-                    let previousSegment = previousSegmentId |> Option.bind (fun segmentId -> Map.tryFind segmentId segmentById)
-                    let edges = Map.tryFind node graph |> Option.defaultValue []
-
-                    let distances, previous =
-                        ((distances, previous), edges |> List.sortBy (fun edge -> edge.ToNode, edge.Segment.Id))
-                        ||> List.fold (fun (distances, previous) edge ->
-                            let nextState = edge.ToNode, Some edge.Segment.Id
-
-                            if not (Set.contains nextState unvisited) then
-                                distances, previous
-                            else
-                                let delay = intersectionDelayMinutes world mode node previousSegment edge.Segment
-                                let candidate = distance + edge.SegmentMinutes + float delay
-                                let known = Map.tryFind nextState distances |> Option.defaultValue Double.PositiveInfinity
-
-                                if candidate < known then
-                                    Map.add nextState candidate distances,
-                                    Map.add nextState (state, edge, delay, classifyIntersectionMovement world node previousSegment edge.Segment) previous
-                                else
-                                    distances, previous)
-
-                    loop unvisited distances previous
-
-            let distances = Map.add startState 0.0 Map.empty
-
-            match loop allStates distances Map.empty with
-            | None -> None
-            | Some (distances, previous) ->
-                let destinationState =
-                    distances
-                    |> Map.toSeq
-                    |> Seq.filter (fun ((node, _), _) -> node = destinationNode)
-                    |> Seq.sortBy snd
-                    |> Seq.tryHead
-                    |> Option.map fst
-
-                let rec rebuild state steps =
-                    if state = startState then
-                        Some steps
-                    else
-                        match Map.tryFind state previous with
-                        | Some (priorState, edge, delay, movement) ->
-                            let step =
-                                { FromNode = edge.FromNode
-                                  ToNode = edge.ToNode
-                                  Segment = edge.Segment
-                                  LengthMeters = edge.LengthMeters
-                                  SegmentMinutes = int (Math.Ceiling edge.SegmentMinutes)
-                                  IntersectionDelayMinutes = delay
-                                  Movement = movement }
-
-                            rebuild priorState (step :: steps)
-                        | None -> None
-
-                destinationState
-                |> Option.bind (fun destinationState ->
-                    rebuild destinationState []
-                    |> Option.map (fun steps ->
-                        let totalRoadMinutes = Map.find destinationState distances
-                        let accessMinutes = float (minutesAtSpeed 5.0 (originAccess + destinationAccess))
-                        let segments = steps |> List.map _.Segment
-                        let segmentMinutes = steps |> List.map _.SegmentMinutes
-                        let intersectionDelays = steps |> List.map _.IntersectionDelayMinutes
-                        let nodePath =
-                            match steps with
-                            | [] -> []
-                            | first :: _ -> first.FromNode :: (steps |> List.map _.ToNode)
-
-                        totalRoadMinutes + accessMinutes, originAccess + destinationAccess, segments, nodePath, segmentMinutes, intersectionDelays))
-        | _ -> None
+        TransportRouting.intersectionDelayMinutes world mode nodeId previousSegment nextSegment
 
     let private firstParkingNear world destination =
         world.Transport.ParkingZones
@@ -412,8 +220,8 @@ module Transport =
         | _ -> None
 
     let private privateCarRoute world seed tick tripKey origin destination deadline (sim: Sim) _household =
-        roadRoute world PrivateCar origin destination
-        |> Option.map (fun (roadMinutes, accessMeters, segments, nodePath, segmentMinutes, intersectionDelays) ->
+        TransportRouting.roadRoute world PrivateCar origin destination
+        |> Option.map (fun roadRoute ->
             let parking = firstParkingNear world destination
             let parkingPressure =
                 parking
@@ -422,8 +230,8 @@ module Transport =
 
             let parkingMinutes = parking |> Option.map _.AverageSearchMinutes |> Option.defaultValue 12
             let parkingCost = parking |> Option.map (fun zone -> zone.PricePerHour) |> Option.defaultValue 4m
-            let congestion = segments |> List.map (congestionFor world) |> List.append [ 0.0 ] |> List.average
-            let expected = int (Math.Ceiling roadMinutes) + parkingMinutes
+            let congestion = roadRoute.Segments |> List.map (TransportRouting.congestionFor world) |> List.append [ 0.0 ] |> List.average
+            let expected = int (Math.Ceiling roadRoute.TotalMinutes) + parkingMinutes
             let lateRisk =
                 deadline
                 |> Option.map (fun deadline -> normalizeMinute (world.MinuteOfDay + expected) - deadline)
@@ -440,32 +248,32 @@ module Transport =
             let route =
                 { Id = routeId seed tick "private-car" tripKey
                   Mode = PrivateCar
-                  SegmentIds = segments |> List.map _.Id
-                  LaneIds = segments |> List.collect _.LaneIds
-                  NodePath = nodePath
-                  SegmentTravelMinutes = segmentMinutes
-                  IntersectionDelayMinutes = intersectionDelays
+                  Origin = roadRoute.Origin
+                  Destination = roadRoute.Destination
+                  Legs = roadRoute.Legs
+                  Geometry = roadRoute.Geometry
+                  TotalDistanceMeters = roadRoute.TotalDistanceMeters
                   TransitRouteId = None
                   ExpectedMinutes = expected
                   Reliability = clamp01 (0.90 - congestion * 0.35 - parkingPressure * 0.18)
-                  MoneyCost = parkingCost + decimal (roadMinutes * 0.11)
-                  WalkMeters = accessMeters + (parking |> Option.map _.WalkingDistanceMeters |> Option.defaultValue 300.0)
+                  MoneyCost = parkingCost + decimal (roadRoute.TotalMinutes * 0.11)
+                  WalkMeters = roadRoute.AccessMeters + (parking |> Option.map _.WalkingDistanceMeters |> Option.defaultValue 300.0)
                   Safety = clamp01 (0.80 - congestion * 0.15)
                   Stress = clamp01 (congestion * 0.45 + parkingPressure * 0.35 + sim.Personality.Neuroticism * 0.20)
                   RequiresParking = true
                   TransferCount = 0 }
 
-            route, roadMinutes + float parkingMinutes, reasons)
+            route, roadRoute.TotalMinutes + float parkingMinutes, reasons)
 
     let private busRoute world seed tick tripKey origin destination deadline (sim: Sim) =
         transitRouteServing world origin destination
         |> Option.bind (fun transit ->
-            roadRoute world Bus origin destination
-            |> Option.map (fun (roadMinutes, accessMeters, segments, nodePath, segmentMinutes, intersectionDelays) ->
-                let trafficPenalty = if transit.DedicatedRightOfWay then 1.0 else 1.0 + (segments |> List.map (congestionFor world) |> List.append [ 0.0 ] |> List.average) * 0.45
+            TransportRouting.roadRoute world Bus origin destination
+            |> Option.map (fun roadRoute ->
+                let trafficPenalty = if transit.DedicatedRightOfWay then 1.0 else 1.0 + (roadRoute.Segments |> List.map (TransportRouting.congestionFor world) |> List.append [ 0.0 ] |> List.average) * 0.45
                 let wait = max 1 (transit.HeadwayMinutes / 2)
                 let dwell = max 2 (transit.Stops.Length * 1)
-                let expected = int (Math.Ceiling(roadMinutes * trafficPenalty)) + wait + dwell
+                let expected = int (Math.Ceiling(roadRoute.TotalMinutes * trafficPenalty)) + wait + dwell
                 let arrival = normalizeMinute (world.MinuteOfDay + expected)
                 let lateRisk = deadline |> Option.map (fun d -> arrival - d) |> Option.defaultValue 0
 
@@ -478,16 +286,16 @@ module Transport =
                 let route =
                     { Id = routeId seed tick "bus" tripKey
                       Mode = Bus
-                      SegmentIds = segments |> List.map _.Id
-                      LaneIds = segments |> List.collect _.LaneIds
-                      NodePath = nodePath
-                      SegmentTravelMinutes = segmentMinutes
-                      IntersectionDelayMinutes = intersectionDelays
+                      Origin = roadRoute.Origin
+                      Destination = roadRoute.Destination
+                      Legs = roadRoute.Legs
+                      Geometry = roadRoute.Geometry
+                      TotalDistanceMeters = roadRoute.TotalDistanceMeters
                       TransitRouteId = Some transit.Id
                       ExpectedMinutes = expected
                       Reliability = clamp01 (transit.Reliability - transit.Crowding * 0.15)
                       MoneyCost = transit.Fare
-                      WalkMeters = accessMeters + 350.0
+                      WalkMeters = roadRoute.AccessMeters + 350.0
                       Safety = clamp01 (0.72 + transit.Reliability * 0.15)
                       Stress = clamp01 ((1.0 - transit.Reliability) * 0.45 + transit.Crowding * 0.35 + sim.Personality.Neuroticism * 0.20)
                       RequiresParking = false
@@ -496,39 +304,36 @@ module Transport =
                 route, float expected, reasons))
 
     let private simpleModeRoute world seed tick tripKey mode origin destination (sim: Sim) =
-        let meters = distanceMeters world origin destination
+        match mode with
+        | Walk ->
+            TransportRouting.roadRoute world Walk origin destination
+            |> Option.map (fun roadRoute ->
+                let driver = driverProfile sim
+                let expected = int (Math.Ceiling roadRoute.TotalMinutes)
+                let extraReasons = [ if roadRoute.TotalDistanceMeters > driver.WalkingToleranceMeters then MobilityLimitation ]
+                let route =
+                    { Id = routeId seed tick "walk" tripKey
+                      Mode = Walk
+                      Origin = roadRoute.Origin
+                      Destination = roadRoute.Destination
+                      Legs = roadRoute.Legs
+                      Geometry = roadRoute.Geometry
+                      TotalDistanceMeters = roadRoute.TotalDistanceMeters
+                      TransitRouteId = None
+                      ExpectedMinutes = expected
+                      Reliability = 0.78
+                      MoneyCost = 0m
+                      WalkMeters = roadRoute.TotalDistanceMeters
+                      Safety = 0.62
+                      Stress = clamp01 (0.38 * 0.45 + sim.Personality.Neuroticism * 0.25)
+                      RequiresParking = false
+                      TransferCount = 0 }
 
-        if Double.IsInfinity meters then
+                route, roadRoute.TotalMinutes, extraReasons)
+        | Bike ->
             None
-        else
-            let speed, baseSafety, extraReasons =
-                match mode with
-                | Walk ->
-                    let driver = driverProfile sim
-                    4.8, 0.62, [ if meters > driver.WalkingToleranceMeters then MobilityLimitation ]
-                | Bike -> 15.0, 0.55, [ FamiliarRoute ]
-                | _ -> 1.0, 0.0, []
-
-            let expected = minutesAtSpeed speed meters
-            let route =
-                { Id = routeId seed tick (sprintf "%A" mode) tripKey
-                  Mode = mode
-                  SegmentIds = []
-                  LaneIds = []
-                  NodePath = []
-                  SegmentTravelMinutes = []
-                  IntersectionDelayMinutes = []
-                  TransitRouteId = None
-                  ExpectedMinutes = expected
-                  Reliability = 0.78
-                  MoneyCost = 0m
-                  WalkMeters = if mode = Walk then meters else 120.0
-                  Safety = baseSafety
-                  Stress = clamp01 ((1.0 - baseSafety) * 0.45 + sim.Personality.Neuroticism * 0.25)
-                  RequiresParking = false
-                  TransferCount = 0 }
-
-            Some(route, float expected, extraReasons)
+        | _ ->
+            None
 
     let private chooseModeAndRoute world seed tick tripKey (sim: Sim) household origin destination _ deadline available =
         let candidates =
@@ -615,7 +420,8 @@ module Transport =
                                   ChainLength = if sim.Dependents.IsEmpty then 1 else 2 }
 
                             let driver = driverProfile sim
-                            let firstSegmentId = route.SegmentIds |> List.tryHead
+                            let routeSegmentIds = TransportRoute.segmentIds route
+                            let firstSegmentId = routeSegmentIds |> List.tryHead
                             let firstLaneId =
                                 firstSegmentId
                                 |> Option.bind (fun segmentId ->
@@ -626,7 +432,7 @@ module Transport =
                             let currentSpeed =
                                 firstSegmentId
                                 |> Option.bind (fun segmentId -> world.Map.RoadSegments |> List.tryFind (fun segment -> segment.Id = segmentId))
-                                |> Option.map (fun segment -> segmentEffectiveSpeedKph world segment)
+                                |> Option.map (fun segment -> TransportRouting.segmentEffectiveSpeedKph world segment)
                                 |> Option.defaultValue 0.0
 
                             let vehicle =
@@ -643,7 +449,7 @@ module Transport =
                                   Status = if firstSegmentId.IsSome then VehicleMoving else VehicleCompleted
                                   CurrentLane = firstLaneId
                                   NextRequiredMovement = Some MoveRight
-                                  DistanceToManeuverMeters = route.SegmentIds.Length |> float |> (*) 500.0
+                                  DistanceToManeuverMeters = routeSegmentIds.Length |> float |> (*) 500.0
                                   Driver = driver
                                   MissedManeuvers = 0
                                   DelayMinutes = 0
@@ -692,10 +498,10 @@ module Transport =
                     [ ParkingSearchStarted trip.Id; ParkingFound(trip.Id, zone.Id) ]
 
     let private laneBehaviorEvents world (vehicle: VehicleState) (route: TransportRoute) =
-        match vehicle.CurrentLane, route.LaneIds |> List.tryLast with
+        match vehicle.CurrentLane, TransportRoute.laneIds route |> List.tryLast with
         | Some currentLane, Some targetLane when currentLane <> targetLane ->
             let congestion =
-                route.SegmentIds
+                TransportRoute.segmentIds route
                 |> List.map (fun segmentId -> world.Transport.SegmentCongestion |> Map.tryFind segmentId |> Option.defaultValue 0.0)
                 |> List.append [ 0.0 ]
                 |> List.average
@@ -716,17 +522,17 @@ module Transport =
     let private routeSegmentLength world segmentId =
         world.Map.RoadSegments
         |> List.tryFind (fun segment -> segment.Id = segmentId)
-        |> Option.map (fun segment -> segmentLength world segment)
+        |> Option.map (fun segment -> MapGraph.segmentLength world.Map segment)
         |> Option.defaultValue Double.PositiveInfinity
 
     let private routeSegmentSpeed world segmentId =
         world.Map.RoadSegments
         |> List.tryFind (fun segment -> segment.Id = segmentId)
-        |> Option.map (fun segment -> segmentEffectiveSpeedKph world segment)
+        |> Option.map (fun segment -> TransportRouting.segmentEffectiveSpeedKph world segment)
         |> Option.defaultValue 0.0
 
     let private routeIntersectionAfterSegment route index =
-        route.NodePath
+        TransportRoute.nodePath route
         |> List.tryItem (index + 1)
 
     let private completeVehicle world (trip: TransportTrip) (route: TransportRoute) (vehicle: VehicleState) previousPosition =
@@ -748,7 +554,7 @@ module Transport =
             DelayMinutes = 0 }
 
     let private enterRouteSegment world route index (vehicle: VehicleState) previousPosition =
-        match route.SegmentIds |> List.tryItem index with
+        match TransportRoute.segmentIds route |> List.tryItem index with
         | None ->
             { vehicle with
                 PreviousPosition = previousPosition
@@ -788,7 +594,7 @@ module Transport =
                     else
                         let nextIndex = index + 1
 
-                        if nextIndex >= route.SegmentIds.Length then
+                        if nextIndex >= (TransportRoute.segmentIds route).Length then
                             completeVehicle world trip route vehicle (Some vehicle.CurrentPosition)
                         else
                             enterRouteSegment world route nextIndex vehicle (Some vehicle.CurrentPosition)
@@ -814,11 +620,11 @@ module Transport =
                         else
                             let nextIndex = index + 1
 
-                            if nextIndex >= route.SegmentIds.Length then
+                            if nextIndex >= (TransportRoute.segmentIds route).Length then
                                 completeVehicle world trip route vehicle (Some vehicle.CurrentPosition)
                             else
                                 let delay =
-                                    route.IntersectionDelayMinutes
+                                    TransportRoute.intersectionDelayMinutes route
                                     |> List.tryItem nextIndex
                                     |> Option.defaultValue 0
 
@@ -873,6 +679,12 @@ module Transport =
             (world.Transport.Vehicles, demand)
             ||> List.fold (fun vehicles (_, vehicle, _, _) -> Map.add vehicle.Id vehicle vehicles)
 
+        let movements =
+            (world.Transport.Movements, demand)
+            ||> List.fold (fun movements ((trip: TransportTrip), (vehicle: VehicleState), (route: TransportRoute), _) ->
+                let movement = createMovement world trip route vehicle
+                Map.add movement.Id movement movements)
+
         let lateStartEvents (trip: TransportTrip) (route: TransportRoute) =
             match trip.DeadlineMinute with
             | Some deadline ->
@@ -902,6 +714,7 @@ module Transport =
 
         { world.Transport with
             Trips = trips
+            Movements = movements
             Vehicles = vehicles
             RecentEvents = completedEvents @ startedEvents }
 
@@ -1085,8 +898,12 @@ module Transport =
             |> updateParkingState
             |> updateAccessMetrics world
 
+        let world =
+            { world with Transport = transport }
+            |> MovementSystem.tick minutes
+
         let routeCalculations =
-            transport.RecentEvents
+            world.Transport.RecentEvents
             |> List.sumBy (function RouteChosen _ -> 1 | _ -> 0)
 
         let world =
@@ -1095,139 +912,139 @@ module Transport =
                     { world.PerformanceDiagnostics with
                         RouteCalculations = world.PerformanceDiagnostics.RouteCalculations + routeCalculations
                         CacheMisses = world.PerformanceDiagnostics.CacheMisses + routeCalculations
-                        TripsProcessed = transport.Trips.Count } }
+                        TripsProcessed = world.Transport.Trips.Count } }
 
-        applyAccessFeedback world transport
+        applyAccessFeedback world world.Transport
 
 module TrafficVisualization =
     open Simulation.Domain
-    open Simulation.Measures
+    open System
 
     let private renderPosition (coordinates: Coordinates) : VehicleRenderPosition =
         { RenderX = coordinates.X; RenderY = coordinates.Y; RenderZ = None }
 
-    let private segmentById (world: World) =
-        world.Map.RoadSegments
-        |> List.map (fun segment -> segment.Id, segment)
-        |> Map.ofList
+    let private visualStatusFromMovement (status: MovementStatus) =
+        match status with
+        | MovementStatus.Planned
+        | MovementStatus.Waiting -> StoppedVisual
+        | MovementStatus.InProgress
+        | MovementStatus.Delayed -> Moving
+        | MovementStatus.Queued -> QueuedVisual
+        | MovementStatus.WaitingAtIntersection
+        | MovementStatus.Blocked -> WaitingAtIntersectionVisual
+        | MovementStatus.Completed -> CompletedVisual
+        | MovementStatus.Canceled
+        | MovementStatus.Failed -> HiddenVisual
 
-    let private activeVisualStatus =
+    let private isActiveMovement (movement: MovementState) =
+        match movement.Status with
+        | MovementStatus.Completed
+        | MovementStatus.Canceled
+        | MovementStatus.Failed -> false
+        | _ -> true
+
+    let private vehicleIdOfKind =
         function
-        | VehicleMoving -> Moving
-        | VehicleWaitingAtIntersection -> WaitingAtIntersectionVisual
-        | VehicleQueued -> QueuedVisual
-        | VehicleParked -> ParkedVisual
-        | VehicleCompleted -> CompletedVisual
-        | VehicleNotStarted -> StoppedVisual
-        | VehicleCanceled
-        | VehicleFailed -> HiddenVisual
+        | MovingEntityKind.Vehicle vehicleId
+        | MovingEntityKind.EmergencyResponder vehicleId
+        | MovingEntityKind.FreightVehicle vehicleId
+        | MovingEntityKind.ServiceVehicle vehicleId -> Some vehicleId
+        | _ -> None
 
-    let private positionOnSegment (world: World) (route: TransportRoute option) routeIndex segmentId progress =
-        let segmentMap = segmentById world
-
-        match Map.tryFind segmentId segmentMap with
-        | None -> { RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None
-        | Some segment ->
-            let fromNode, toNode =
-                match route, routeIndex with
-                | Some route, Some index ->
-                    match route.NodePath |> List.tryItem index, route.NodePath |> List.tryItem (index + 1) with
-                    | Some fromNode, Some toNode -> fromNode, toNode
-                    | _ -> segment.From, segment.To
-                | _ -> segment.From, segment.To
-
-            match Map.tryFind fromNode world.Map.RoadNodes, Map.tryFind toNode world.Map.RoadNodes with
-            | Some fromNode, Some toNode ->
-                let p = clamp01 progress
-                let x = fromNode.Position.X + (toNode.Position.X - fromNode.Position.X) * p
-                let y = fromNode.Position.Y + (toNode.Position.Y - fromNode.Position.Y) * p
-                let heading = Math.Atan2(toNode.Position.Y - fromNode.Position.Y, toNode.Position.X - fromNode.Position.X)
-                { RenderX = x; RenderY = y; RenderZ = None }, Some heading
-            | _ -> { RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None
-
-    let private positionFromVehiclePosition (world: World) (route: TransportRoute option) routeIndex =
+    let private simIdOfKind =
         function
-        | OnRoadSegment(segmentId, _, progress) ->
-            positionOnSegment world route routeIndex segmentId progress
-        | WaitingAtIntersection(nodeId, _) ->
-            world.Map.RoadNodes
-            |> Map.tryFind nodeId
-            |> Option.map (fun node -> renderPosition node.Position, None)
-            |> Option.defaultValue ({ RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None)
-        | ParkedAt(_, Some placeId) ->
-            world.Map.Places
-            |> Map.tryFind placeId
-            |> Option.map (fun place -> renderPosition place.Position, None)
-            |> Option.defaultValue ({ RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None)
-        | AtStop stopId ->
-            world.Transport.TransitStops
-            |> Map.tryFind stopId
-            |> Option.map (fun stop -> renderPosition stop.Position, None)
-            |> Option.defaultValue ({ RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None)
-        | OffNetwork
-        | CompletedTripPosition -> { RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None
-        | ParkedAt(_, None) -> { RenderX = 0.0; RenderY = 0.0; RenderZ = None }, None
+        | MovingEntityKind.Pedestrian simId
+        | MovingEntityKind.Cyclist simId -> Some simId
+        | _ -> None
 
-    let getVehicleView (world: World) (vehicleId: VehicleId) : VehicleView option =
-        world.Transport.Vehicles
-        |> Map.tryFind vehicleId
-        |> Option.map (fun vehicle ->
-            let trip = world.Transport.Trips |> Map.tryFind vehicle.Trip
-            let route = trip |> Option.bind _.CurrentRoute
-            let position, heading = positionFromVehiclePosition world route vehicle.CurrentRouteIndex vehicle.CurrentPosition
-            let previous =
-                vehicle.PreviousPosition
-                |> Option.map (fun prior -> positionFromVehiclePosition world route vehicle.CurrentRouteIndex prior |> fst)
+    let private currentLeg (movement: MovementState) =
+        movement.Route.Legs |> List.tryItem movement.CurrentLegIndex
 
-            let segmentId, laneId, intersectionId, progress =
-                match vehicle.CurrentPosition with
-                | OnRoadSegment(segmentId, laneId, progress) -> Some segmentId, laneId, None, Some progress
-                | WaitingAtIntersection(intersectionId, laneId) -> None, laneId, Some intersectionId, None
-                | _ -> None, None, None, None
+    let private currentSegmentId (movement: MovementState) =
+        movement |> currentLeg |> Option.bind _.SegmentId
 
-            let view: VehicleView =
-                { VehicleId = vehicle.Id
-                  TripId = Some vehicle.Trip
-                  Mode = vehicle.Mode
-                  SegmentId = segmentId
-                  LaneId = laneId
-                  IntersectionId = intersectionId
-                  Position = position
-                  PreviousPosition = previous
-                  ProgressAlongSegment = progress
-                  HeadingRadians = heading
-                  SpeedKph = vehicle.CurrentSpeedKph
-                  Status = activeVisualStatus vehicle.Status
-                  RouteIndex = vehicle.CurrentRouteIndex
-                  Occupancy = vehicle.Occupants }
+    let private currentIntersectionId (movement: MovementState) =
+        match movement.Status, currentLeg movement with
+        | MovementStatus.WaitingAtIntersection, Some leg -> leg.ToRoadNode
+        | MovementStatus.Blocked, Some leg -> leg.ToRoadNode
+        | _ -> None
 
-            view)
+    let private movingEntityView (movement: MovementState) : MovingEntityView =
+        { MovementId = movement.Id
+          EntityKind = movement.Kind
+          VehicleId = vehicleIdOfKind movement.Kind
+          SimId = simIdOfKind movement.Kind
+          TripId = movement.TripId
+          Mode = movement.Route.Mode
+          CurrentPosition = movement.CurrentPosition
+          PreviousPosition = movement.PreviousPosition
+          HeadingRadians = movement.HeadingRadians
+          SpeedKph = movement.CurrentSpeedKph
+          Status = movement.Status
+          Progress = movement.Progress
+          DelaySeconds = movement.DelaySeconds
+          RoutePreview = movement.Route.Geometry.Polyline }
 
-    let private allVehicleViews (world: World) : VehicleView list =
-        world.Transport.Vehicles
+    let private allMovements (world: World) : MovementState list =
+        world.Transport.Movements
         |> Map.toSeq
         |> Seq.sortBy fst
-        |> Seq.choose (fun (vehicleId, vehicle) ->
-            match vehicle.Status with
-            | VehicleCompleted
-            | VehicleCanceled
-            | VehicleFailed -> None
-            | _ -> getVehicleView world vehicleId)
+        |> Seq.map snd
+        |> Seq.filter isActiveMovement
         |> Seq.toList
 
-    let getVehiclesOnRoadSegment (world: World) segmentId : VehicleView list =
-        allVehicleViews world
-        |> List.filter (fun vehicle -> vehicle.SegmentId = Some segmentId)
+    let getMovingEntityView (world: World) (movementId: MovementId) : MovingEntityView option =
+        world.Transport.Movements
+        |> Map.tryFind movementId
+        |> Option.filter isActiveMovement
+        |> Option.map movingEntityView
 
-    let getVehiclesAtIntersection (world: World) intersectionId : VehicleView list =
-        allVehicleViews world
-        |> List.filter (fun vehicle -> vehicle.IntersectionId = Some intersectionId)
+    let getVehicleView (world: World) (vehicleId: VehicleId) : VehicleView option =
+        world.Transport.Movements
+        |> Map.toSeq
+        |> Seq.map snd
+        |> Seq.tryFind (fun movement -> isActiveMovement movement && vehicleIdOfKind movement.Kind = Some vehicleId)
+        |> Option.map (fun movement ->
+            { VehicleId = vehicleId
+              TripId = Some movement.TripId
+              Mode = movement.Route.Mode
+              SegmentId = currentSegmentId movement
+              LaneId = movement.Route.Legs |> List.tryItem movement.CurrentLegIndex |> Option.bind (fun leg -> leg.LaneIds |> List.tryHead)
+              IntersectionId = currentIntersectionId movement
+              Position = renderPosition movement.CurrentPosition
+              PreviousPosition = movement.PreviousPosition |> Option.map renderPosition
+              ProgressAlongSegment =
+                match currentLeg movement with
+                | Some leg when leg.DistanceMeters > 0.0 -> Some(Math.Clamp(movement.DistanceOnLegMeters / leg.DistanceMeters, 0.0, 1.0))
+                | Some _ -> Some 0.0
+                | None -> None
+              HeadingRadians = movement.HeadingRadians
+              SpeedKph = movement.CurrentSpeedKph
+              Status = visualStatusFromMovement movement.Status
+              RouteIndex = Some movement.CurrentLegIndex
+              Occupancy = movement.Occupants })
 
-    let private roadSegmentView (world: World) (vehicles: VehicleView list) (segment: RoadSegment) : RoadSegmentTrafficView =
-        let onSegment = vehicles |> List.filter (fun vehicle -> vehicle.SegmentId = Some segment.Id)
+    let private allMovingEntityViews (world: World) : MovingEntityView list =
+        allMovements world |> List.map movingEntityView
+
+    let getVehiclesOnRoadSegment (world: World) segmentId : MovingEntityView list =
+        allMovements world
+        |> List.filter (fun movement -> currentSegmentId movement = Some segmentId && (vehicleIdOfKind movement.Kind).IsSome)
+        |> List.map movingEntityView
+
+    let getVehiclesAtIntersection (world: World) intersectionId : MovingEntityView list =
+        allMovements world
+        |> List.filter (fun movement -> currentIntersectionId movement = Some intersectionId && (vehicleIdOfKind movement.Kind).IsSome)
+        |> List.map movingEntityView
+
+    let private roadSegmentView (world: World) (movements: MovementState list) (segment: RoadSegment) : RoadSegmentTrafficView =
+        let onSegment =
+            movements
+            |> List.filter (fun movement -> currentSegmentId movement = Some segment.Id && (vehicleIdOfKind movement.Kind).IsSome)
+
         let averageSpeed =
             onSegment
-            |> List.map _.SpeedKph
+            |> List.map _.CurrentSpeedKph
             |> List.append [ 0.0 ]
             |> List.average
 
@@ -1265,12 +1082,14 @@ module TrafficVisualization =
 
         view
 
-    let private intersectionView (world: World) (vehicles: VehicleView list) nodeId (intersection: Intersection) : IntersectionTrafficView =
-        let waiting = vehicles |> List.filter (fun vehicle -> vehicle.IntersectionId = Some nodeId)
+    let private intersectionView (world: World) (movements: MovementState list) nodeId (intersection: Intersection) : IntersectionTrafficView =
+        let waiting =
+            movements
+            |> List.filter (fun movement -> currentIntersectionId movement = Some nodeId && (vehicleIdOfKind movement.Kind).IsSome)
+
         let averageDelay =
             waiting
-            |> List.choose (fun vehicle -> world.Transport.Vehicles |> Map.tryFind vehicle.VehicleId)
-            |> List.map (fun vehicle -> float vehicle.DelayMinutes * 60.0)
+            |> List.map (fun movement -> float movement.DelaySeconds)
             |> List.append [ 0.0 ]
             |> List.average
 
@@ -1290,41 +1109,58 @@ module TrafficVisualization =
 
         view
 
-    let private frameMetrics (world: World) (vehicles: VehicleView list) : TrafficFrameMetrics =
-        let moving = vehicles |> List.filter (fun vehicle -> vehicle.Status = Moving)
-        let waiting = vehicles |> List.filter (fun vehicle -> vehicle.Status = WaitingAtIntersectionVisual || vehicle.Status = QueuedVisual)
-        let parked = vehicles |> List.filter (fun vehicle -> vehicle.Status = ParkedVisual)
+    let private frameMetrics (world: World) (vehicles: MovingEntityView list) : TrafficFrameMetrics =
+        let moving = vehicles |> List.filter (fun vehicle -> vehicle.Status = MovementStatus.InProgress || vehicle.Status = MovementStatus.Delayed)
+        let waiting = vehicles |> List.filter (fun vehicle -> vehicle.Status = MovementStatus.WaitingAtIntersection || vehicle.Status = MovementStatus.Queued || vehicle.Status = MovementStatus.Blocked)
         let completed =
-            world.Transport.Vehicles
+            world.Transport.Movements
             |> Map.toSeq
-            |> Seq.sumBy (fun (_, vehicle) -> if vehicle.Status = VehicleCompleted then 1 else 0)
+            |> Seq.sumBy (fun (_, movement) ->
+                if (vehicleIdOfKind movement.Kind).IsSome && movement.Status = MovementStatus.Completed then 1 else 0)
 
         { ActiveVehicleCount = vehicles.Length
           MovingVehicleCount = moving.Length
           WaitingVehicleCount = waiting.Length
-          ParkedVehicleCount = parked.Length
+          ParkedVehicleCount = 0
           CompletedVehicleCount = completed
           AverageVehicleSpeedKph = vehicles |> List.map _.SpeedKph |> List.append [ 0.0 ] |> List.average
           AverageCongestion = world.Transport.Metrics.AverageCongestion }
 
     let getTrafficFrame (world: World) : TrafficFrame =
-        let vehicles = allVehicleViews world
+        let movements = allMovements world
+        let movingEntities = movements |> List.map movingEntityView
+        let vehicles = movingEntities |> List.filter (fun entity -> entity.VehicleId.IsSome)
+        let pedestrians =
+            movingEntities
+            |> List.filter (fun entity ->
+                match entity.EntityKind with
+                | MovingEntityKind.Pedestrian _ -> true
+                | _ -> false)
+
+        let transitVehicles =
+            movingEntities
+            |> List.filter (fun entity ->
+                match entity.EntityKind with
+                | MovingEntityKind.TransitVehicle _ -> true
+                | _ -> false)
 
         let frame: TrafficFrame =
             { Tick = TickId world.Meta.Tick
               SimTime = { Day = world.Day; MinuteOfDay = world.MinuteOfDay }
+              MovingEntities = movingEntities
               Vehicles = vehicles
-              RoadSegments =
+              Pedestrians = pedestrians
+              TransitVehicles = transitVehicles
+              RoadSegmentTrafficViews =
                 world.Map.RoadSegments
                 |> List.sortBy _.Id
-                |> List.map (roadSegmentView world vehicles)
-              Intersections =
+                |> List.map (roadSegmentView world movements)
+              IntersectionTrafficViews =
                 world.Transport.Intersections
                 |> Map.toSeq
                 |> Seq.sortBy fst
-                |> Seq.map (fun (nodeId, intersection) -> intersectionView world vehicles nodeId intersection)
+                |> Seq.map (fun (nodeId, intersection) -> intersectionView world movements nodeId intersection)
                 |> Seq.toList
-              TransitVehicles = vehicles |> List.filter (fun vehicle -> vehicle.Mode = Bus || vehicle.Mode = Tram || vehicle.Mode = Metro || vehicle.Mode = RegionalRail)
               Events = []
               Metrics = frameMetrics world vehicles }
 
@@ -1337,41 +1173,27 @@ module TrafficVisualization =
             trip.CurrentRoute
             |> Option.map (fun route ->
                 let segments =
-                    route.SegmentIds
-                    |> List.mapi (fun index segmentId ->
-                        let fromPosition, toPosition =
-                            match route.NodePath |> List.tryItem index, route.NodePath |> List.tryItem (index + 1) with
-                            | Some fromNode, Some toNode ->
-                                let fromPos =
-                                    world.Map.RoadNodes
-                                    |> Map.tryFind fromNode
-                                    |> Option.map (fun node -> renderPosition node.Position)
-                                    |> Option.defaultValue { RenderX = 0.0; RenderY = 0.0; RenderZ = None }
+                    route.Legs
+                    |> List.choose (fun leg ->
+                        leg.SegmentId
+                        |> Option.map (fun segmentId ->
+                            let fromPosition =
+                                leg.Geometry.Polyline
+                                |> List.tryHead
+                                |> Option.map renderPosition
+                                |> Option.defaultValue (renderPosition leg.From.Position)
 
-                                let toPos =
-                                    world.Map.RoadNodes
-                                    |> Map.tryFind toNode
-                                    |> Option.map (fun node -> renderPosition node.Position)
-                                    |> Option.defaultValue { RenderX = 0.0; RenderY = 0.0; RenderZ = None }
+                            let toPosition =
+                                leg.Geometry.Polyline
+                                |> List.tryLast
+                                |> Option.map renderPosition
+                                |> Option.defaultValue (renderPosition leg.To.Position)
 
-                                fromPos, toPos
-                            | _ ->
-                                let segmentMap = segmentById world
-                                match Map.tryFind segmentId segmentMap with
-                                | Some segment ->
-                                    let fromPos = world.Map.RoadNodes |> Map.tryFind segment.From |> Option.map (fun node -> renderPosition node.Position) |> Option.defaultValue { RenderX = 0.0; RenderY = 0.0; RenderZ = None }
-                                    let toPos = world.Map.RoadNodes |> Map.tryFind segment.To |> Option.map (fun node -> renderPosition node.Position) |> Option.defaultValue { RenderX = 0.0; RenderY = 0.0; RenderZ = None }
-                                    fromPos, toPos
-                                | None -> { RenderX = 0.0; RenderY = 0.0; RenderZ = None }, { RenderX = 0.0; RenderY = 0.0; RenderZ = None }
-
-                        let segmentView: RenderableRouteSegment =
                             { SegmentId = segmentId
                               FromPosition = fromPosition
                               ToPosition = toPosition
-                              ExpectedTravelMinutes = route.SegmentTravelMinutes |> List.tryItem index |> Option.defaultValue 0
-                              ExpectedIntersectionDelayMinutes = route.IntersectionDelayMinutes |> List.tryItem index |> Option.defaultValue 0 }
-
-                        segmentView)
+                              ExpectedTravelMinutes = leg.SegmentTravelMinutes
+                              ExpectedIntersectionDelayMinutes = leg.IntersectionDelayMinutes }))
 
                 let renderable: RenderableRoute =
                     { TripId = tripId
@@ -1383,62 +1205,42 @@ module TrafficVisualization =
                 renderable))
 
     let diffTrafficFrames (previous: TrafficFrame) (current: TrafficFrame) : TrafficFrameDiff =
-        let previousVehicles = previous.Vehicles |> List.map (fun vehicle -> vehicle.VehicleId, vehicle) |> Map.ofList
-        let currentVehicles = current.Vehicles |> List.map (fun vehicle -> vehicle.VehicleId, vehicle) |> Map.ofList
+        let previousEntities = previous.MovingEntities |> List.map (fun entity -> entity.MovementId, entity) |> Map.ofList
+        let currentEntities = current.MovingEntities |> List.map (fun entity -> entity.MovementId, entity) |> Map.ofList
 
         let added =
-            current.Vehicles
-            |> List.filter (fun vehicle -> not (Map.containsKey vehicle.VehicleId previousVehicles))
+            current.MovingEntities
+            |> List.filter (fun entity -> not (Map.containsKey entity.MovementId previousEntities))
 
         let updated =
-            current.Vehicles
-            |> List.filter (fun vehicle ->
-                previousVehicles
-                |> Map.tryFind vehicle.VehicleId
-                |> Option.exists (fun prev -> prev <> vehicle))
+            current.MovingEntities
+            |> List.filter (fun entity ->
+                previousEntities
+                |> Map.tryFind entity.MovementId
+                |> Option.exists (fun previous -> previous <> entity))
 
         let removed =
-            previous.Vehicles
-            |> List.filter (fun vehicle -> not (Map.containsKey vehicle.VehicleId currentVehicles))
-            |> List.map _.VehicleId
+            previous.MovingEntities
+            |> List.filter (fun entity -> not (Map.containsKey entity.MovementId currentEntities))
+            |> List.map _.MovementId
 
-        let previousRoads = previous.RoadSegments |> List.map (fun road -> road.SegmentId, road) |> Map.ofList
+        let previousRoads = previous.RoadSegmentTrafficViews |> List.map (fun road -> road.SegmentId, road) |> Map.ofList
         let changedRoads =
-            current.RoadSegments
+            current.RoadSegmentTrafficViews
             |> List.filter (fun road -> previousRoads |> Map.tryFind road.SegmentId |> Option.exists (fun prev -> prev <> road))
 
-        let previousIntersections = previous.Intersections |> List.map (fun intersection -> intersection.IntersectionId, intersection) |> Map.ofList
+        let previousIntersections = previous.IntersectionTrafficViews |> List.map (fun intersection -> intersection.IntersectionId, intersection) |> Map.ofList
         let changedIntersections =
-            current.Intersections
+            current.IntersectionTrafficViews
             |> List.filter (fun intersection -> previousIntersections |> Map.tryFind intersection.IntersectionId |> Option.exists (fun prev -> prev <> intersection))
 
         let vehicleEvents =
-            [ for vehicle in added do
-                  match vehicle.SegmentId with
-                  | Some segmentId -> VehicleEnteredSegment(vehicle.VehicleId, segmentId)
-                  | None -> ()
-
-              for vehicle in updated do
-                  match Map.tryFind vehicle.VehicleId previousVehicles with
-                  | Some prior ->
-                      match prior.SegmentId, vehicle.SegmentId with
-                      | Some priorSegment, Some segment when priorSegment <> segment ->
-                          VehicleLeftSegment(vehicle.VehicleId, priorSegment)
-                          VehicleEnteredSegment(vehicle.VehicleId, segment)
-                      | None, Some segment -> VehicleEnteredSegment(vehicle.VehicleId, segment)
-                      | Some priorSegment, None -> VehicleLeftSegment(vehicle.VehicleId, priorSegment)
-                      | _ -> ()
-
-                      if prior.IntersectionId <> vehicle.IntersectionId then
-                          match vehicle.IntersectionId with
-                          | Some intersectionId -> VehicleStoppedAtIntersection(vehicle.VehicleId, intersectionId)
-                          | None when prior.Status = WaitingAtIntersectionVisual || prior.Status = QueuedVisual -> VehicleStartedMoving vehicle.VehicleId
-                          | _ -> ()
-                  | None -> ()
-
-              for vehicleId in removed do
-                  match Map.tryFind vehicleId previousVehicles |> Option.bind _.TripId with
-                  | Some tripId -> VehicleCompletedTrip(vehicleId, tripId)
+            [ for movementId in removed do
+                  match Map.tryFind movementId previousEntities with
+                  | Some entity ->
+                      match entity.VehicleId with
+                      | Some vehicleId -> VehicleCompletedTrip(vehicleId, entity.TripId)
+                      | None -> ()
                   | None -> () ]
 
         { Tick = current.Tick

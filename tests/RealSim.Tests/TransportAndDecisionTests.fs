@@ -4,6 +4,7 @@ open System
 open Xunit
 open Simulation
 open Simulation.Domain
+open RealSim.Avalonia.Services
 
 module TransportAndDecisionTests =
     let private morningWorld () =
@@ -186,6 +187,7 @@ module TransportAndDecisionTests =
                 { world.Transport with
                     TransitRoutes = Map.empty
                     Trips = Map.empty
+                    Movements = Map.empty
                     Vehicles = Map.empty
                     RecentEvents = [] } }
 
@@ -213,6 +215,343 @@ module TransportAndDecisionTests =
         let route = update trip.CurrentRoute.Value
         let trip = { trip with CurrentRoute = Some route; PlannedRoute = Some route }
         { world with Transport = { world.Transport with Trips = Map.add trip.Id trip world.Transport.Trips } }
+
+    let private routedPlacePair world =
+        let places =
+            world.Map.Places
+            |> Map.toSeq
+            |> Seq.choose (fun (placeId, _) ->
+                MapGraph.resolveRoadAccess world.Map placeId
+                |> Option.map (fun access -> placeId, access.Node))
+            |> Seq.toList
+
+        seq {
+            for origin, originNode in places do
+                for destination, destinationNode in places do
+                    if origin <> destination && originNode <> destinationNode then
+                        origin, destination
+        }
+        |> Seq.filter (fun (origin, destination) -> TransportRouting.roadRoute world PrivateCar origin destination |> Option.isSome)
+        |> Seq.sortByDescending (fun (origin, destination) -> MapGraph.distanceMeters world.Map world.Map.Places[origin].Position world.Map.Places[destination].Position)
+        |> Seq.head
+
+    let private walkingPlacePair world =
+        let places =
+            world.Map.Places
+            |> Map.toSeq
+            |> Seq.map fst
+            |> Seq.toList
+
+        seq {
+            for origin in places do
+                for destination in places do
+                    if origin <> destination then
+                        origin, destination
+        }
+        |> Seq.filter (fun (origin, destination) ->
+            MapGraph.distanceMeters world.Map world.Map.Places[origin].Position world.Map.Places[destination].Position <= 3200.0
+            && TransportRouting.roadRoute world Walk origin destination |> Option.isSome)
+        |> Seq.sortBy (fun (origin, destination) -> MapGraph.distanceMeters world.Map world.Map.Places[origin].Position world.Map.Places[destination].Position)
+        |> Seq.head
+
+    let private walkingTripWorld origin destination world =
+        let simId, sim =
+            world.Sims
+            |> Map.toSeq
+            |> Seq.find (fun (_, sim) -> sim.LifeStage <> Child)
+
+        let household = world.Households[sim.Household]
+        let sim =
+            { sim with
+                Location =
+                    InTransit
+                        { Origin = origin
+                          Destination = destination
+                          Purpose = ToLeisure
+                          RemainingMinutes = 45
+                          TotalMinutes = 45 } }
+
+        { world with
+            Sims = Map.add simId sim world.Sims
+            Households = Map.add sim.Household { household with TransportationAccess = 0.0; Assets = 0m } world.Households
+            Transport =
+                { world.Transport with
+                    TransitRoutes = Map.empty
+                    Trips = Map.empty
+                    Movements = Map.empty
+                    Vehicles = Map.empty
+                    RecentEvents = [] } }
+
+    let private firstMovement world =
+        world.Transport.Movements |> Map.toSeq |> Seq.map snd |> Seq.head
+
+    [<Fact>]
+    let ``CarTripCreatesMovementState`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let result = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement result
+        let route = firstCurrentRoute result
+
+        Assert.Equal(route.Id, movement.RouteId)
+        Assert.Equal(MovementStatus.InProgress, movement.Status)
+        Assert.True(movement.TotalDistanceMeters > 0.0)
+        Assert.True(movement.Route.Geometry.Polyline.Length >= 2)
+        Assert.Contains(result.Transport.Movements |> Map.toSeq |> Seq.map snd, fun candidate ->
+            match candidate.Kind with
+            | MovingEntityKind.Vehicle _ -> true
+            | _ -> false)
+
+    [<Fact>]
+    let ``WalkingTripCreatesPedestrianMovementWhenRouteExists`` () =
+        let world = TestWorld.create ()
+        let origin, destination = walkingPlacePair world
+        let result = world |> walkingTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement result
+
+        match movement.Kind with
+        | MovingEntityKind.Pedestrian _ -> Assert.Equal(Walk, movement.Route.Mode)
+        | other -> Assert.Fail($"Expected pedestrian movement, got {other}.")
+
+    [<Fact>]
+    let ``FailedRouteDoesNotCreateCompletedMovement`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let disconnected = { world with Map = { world.Map with RoadSegments = [] } }
+        let result = disconnected |> privateCarTripWorld origin destination |> Transport.tick 0
+
+        Assert.Empty(result.Transport.Movements)
+        Assert.DoesNotContain(result.Transport.Vehicles |> Map.toSeq |> Seq.map snd, fun vehicle -> vehicle.Status = VehicleCompleted)
+
+    [<Fact>]
+    let ``MovementStateHasRenderablePosition`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let movement = world |> privateCarTripWorld origin destination |> Transport.tick 0 |> firstMovement
+
+        Assert.False(Double.IsNaN(movement.CurrentPosition.X))
+        Assert.False(Double.IsNaN(movement.CurrentPosition.Y))
+        Assert.InRange(movement.Progress, 0.0, 1.0)
+        Assert.True(movement.HeadingRadians.IsSome)
+
+    [<Fact>]
+    let ``SameSeedMovementCreationIsDeterministic`` () =
+        let movementText () =
+            let world = TestWorld.create ()
+            let origin, destination = routedPlacePair world
+            let result = world |> privateCarTripWorld origin destination |> Transport.tick 0
+
+            result.Transport.Movements
+            |> Map.toSeq
+            |> Seq.map (fun (movementId, movement) -> sprintf "%A|%A|%.3f|%.3f|%.3f" movementId movement.Kind movement.CurrentPosition.X movement.CurrentPosition.Y movement.Progress)
+            |> Seq.toList
+
+        Assert.Equal<string list>(movementText (), movementText ())
+
+    [<Fact>]
+    let ``MovementAdvancesEveryTick`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let started = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let before = firstMovement started
+        let after = started |> Transport.tick 1 |> firstMovement
+
+        Assert.True(after.Progress > before.Progress)
+        Assert.True(after.DistanceOnLegMeters >= before.DistanceOnLegMeters || after.CurrentLegIndex > before.CurrentLegIndex)
+
+    [<Fact>]
+    let ``MovementCurrentPositionChangesOnTick`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let started = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let before = firstMovement started
+        let after = started |> Transport.tick 1 |> firstMovement
+
+        Assert.NotEqual(before.CurrentPosition, after.CurrentPosition)
+        Assert.Equal(Some before.CurrentPosition, after.PreviousPosition)
+
+    [<Fact>]
+    let ``MovementCompletesAtDestination`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let started = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let completed = started |> Transport.tick 10_000
+        let movement = firstMovement completed
+        let trip = completed.Transport.Trips[movement.TripId]
+        let destinationPosition = completed.Map.Places[destination].Position
+
+        Assert.Equal(MovementStatus.Completed, movement.Status)
+        Assert.Equal(TripStatus.Completed, trip.Status)
+        Assert.True(MapGraph.distanceMeters completed.Map movement.CurrentPosition destinationPosition < 1.0)
+        Assert.Contains(completed.Transport.RecentEvents, function MovementCompleted _ -> true | _ -> false)
+        Assert.Contains(completed.Transport.RecentEvents, function TripCompleted tripId when tripId = trip.Id -> true | _ -> false)
+
+    [<Fact>]
+    let ``MovementDoesNotTeleportWhenBlocked`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let started = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let brokenRoute = { movement.Route with Geometry = { movement.Route.Geometry with Polyline = [] } }
+        let blockedMovement = { movement with Route = brokenRoute; PreviousPosition = None; Status = MovementStatus.InProgress }
+        let prepared = { started with Transport = { started.Transport with Movements = Map.add movement.Id blockedMovement started.Transport.Movements } }
+        let after = MovementSystem.tick 1 prepared
+        let next = after.Transport.Movements[movement.Id]
+
+        Assert.Equal(MovementStatus.Failed, next.Status)
+        Assert.Equal(movement.CurrentPosition, next.CurrentPosition)
+        Assert.Equal(Some movement.CurrentPosition, next.PreviousPosition)
+        Assert.Contains(after.Transport.RecentEvents, function MovementFailed(id, _) when id = movement.Id -> true | _ -> false)
+
+    [<Fact>]
+    let ``MovementUsesRouteGeometry`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let started = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let after = started |> Transport.tick 1 |> firstMovement
+        let expected = TransportRoute.interpolate after.Progress after.Route |> Option.get
+
+        Assert.Equal(expected.X, after.CurrentPosition.X, 6)
+        Assert.Equal(expected.Y, after.CurrentPosition.Y, 6)
+
+    [<Fact>]
+    let ``SameMovementTickSequenceIsDeterministic`` () =
+        let sequence () =
+            let world = TestWorld.create ()
+            let origin, destination = routedPlacePair world
+            let final = world |> privateCarTripWorld origin destination |> Transport.tick 0 |> Transport.tick 1 |> Transport.tick 1 |> Transport.tick 1
+
+            final.Transport.Movements
+            |> Map.toSeq
+            |> Seq.map (fun (id, movement) -> sprintf "%A|%.4f|%.4f|%.4f|%A" id movement.CurrentPosition.X movement.CurrentPosition.Y movement.Progress movement.Status)
+            |> Seq.toList
+
+        Assert.Equal<string list>(sequence (), sequence ())
+
+    [<Fact>]
+    let ``TransportUsesSharedRoutingPipeline`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let sharedRoute = TransportRouting.roadRoute world PrivateCar origin destination |> Option.get
+        let result = world |> privateCarTripWorld origin destination |> Transport.tick 0
+        let transportRoute = firstCurrentRoute result
+
+        Assert.Equal<RoadSegmentId list>(sharedRoute.Segments |> List.map _.Id, TransportRoute.segmentIds transportRoute)
+        Assert.Equal<Coordinates list>(sharedRoute.Geometry.Polyline, transportRoute.Geometry.Polyline)
+        Invariants.checkWorld result |> ignore
+
+    [<Fact>]
+    let ``TransportRouteHasNonEmptyGeometry`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let route = world |> privateCarTripWorld origin destination |> Transport.tick 0 |> firstCurrentRoute
+
+        Assert.NotEmpty(route.Legs)
+        Assert.True(route.Geometry.Polyline.Length >= 2)
+        Assert.True(route.TotalDistanceMeters > 0.0)
+
+    [<Fact>]
+    let ``RouteGeometryStartsNearOriginAndEndsNearDestination`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let route = world |> privateCarTripWorld origin destination |> Transport.tick 0 |> firstCurrentRoute
+        let first = route.Geometry.Polyline.Head
+        let last = route.Geometry.Polyline |> List.last
+        let originPlace = world.Map.Places[origin]
+        let destinationPlace = world.Map.Places[destination]
+
+        Assert.True(MapGraph.distanceMeters world.Map first originPlace.Position < 1.0)
+        Assert.True(MapGraph.distanceMeters world.Map last destinationPlace.Position < 1.0)
+
+    [<Fact>]
+    let ``WalkingRouteRequiresPedestrianNetworkOrFails`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+
+        match TransportRouting.route world Walk origin destination with
+        | RouteFailed PedestrianNetworkUnavailable -> Assert.True(true)
+        | other -> Assert.Fail($"Expected pedestrian network failure, got {other}.")
+
+    [<Fact>]
+    let ``BikeRouteRequiresBikeNetworkOrFails`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+
+        match TransportRouting.route world Bike origin destination with
+        | RouteFailed BikeNetworkUnavailable -> Assert.True(true)
+        | other -> Assert.Fail($"Expected bike network failure, got {other}.")
+
+    [<Fact>]
+    let ``RouteInterpolationReturnsStartMiddleEnd`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let route = world |> privateCarTripWorld origin destination |> Transport.tick 0 |> firstCurrentRoute
+        let start = TransportRoute.interpolate 0.0 route |> Option.get
+        let middle = TransportRoute.interpolate 0.5 route |> Option.get
+        let finish = TransportRoute.interpolate 1.0 route |> Option.get
+
+        Assert.Equal(route.Geometry.Polyline.Head.X, start.X, 6)
+        Assert.Equal(route.Geometry.Polyline.Head.Y, start.Y, 6)
+        Assert.Equal((route.Geometry.Polyline |> List.last).X, finish.X, 6)
+        Assert.Equal((route.Geometry.Polyline |> List.last).Y, finish.Y, 6)
+        Assert.True(MapGraph.distanceMeters world.Map start middle > 0.0)
+        Assert.True(MapGraph.distanceMeters world.Map middle finish > 0.0)
+
+    [<Fact>]
+    let ``DescribeRouteStillWorks`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let route = MapGraph.findRoute world.Map origin destination |> Option.get
+        let description = MapGraph.describeRoute world.Map route
+
+        Assert.Contains("road graph", description)
+        Assert.Contains("km", description)
+
+    [<Fact>]
+    let ``RoadAccessResolutionIsShared`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let originAccess = MapGraph.resolveRoadAccess world.Map origin |> Option.get
+        let destinationAccess = MapGraph.resolveRoadAccess world.Map destination |> Option.get
+        let route = TransportRouting.roadRoute world PrivateCar origin destination |> Option.get
+
+        Assert.Equal(originAccess.Node, route.NodePath.Head)
+        Assert.Equal(destinationAccess.Node, route.NodePath |> List.last)
+        Assert.True(route.AccessMeters >= originAccess.AccessMeters + destinationAccess.AccessMeters)
+
+    [<Fact>]
+    let ``RouteFailureDoesNotFallbackToStraightLine`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let disconnected = { world with Map = { world.Map with RoadSegments = [] } }
+
+        Assert.True((TransportRouting.roadRoute disconnected PrivateCar origin destination).IsNone)
+        Assert.True((MapGraph.findRoute disconnected.Map origin destination).IsNone)
+
+    [<Fact>]
+    let ``RoadRouteUsesMapGraphPath`` () =
+        let world = TestWorld.create ()
+        let origin, destination = routedPlacePair world
+        let originAccess = MapGraph.resolveRoadAccess world.Map origin |> Option.get
+        let destinationAccess = MapGraph.resolveRoadAccess world.Map destination |> Option.get
+        let edgeCost node previousSegment (edge: MapGraph.RoadEdge) =
+            TransportRouting.segmentTravelMinutes world edge.Segment
+            + float (TransportRouting.intersectionDelayMinutes world PrivateCar node previousSegment edge.Segment)
+
+        let mapGraphPath =
+            MapGraph.shortestRoadPathWithCost world.Map originAccess.Node destinationAccess.Node edgeCost
+            |> Option.get
+
+        let route = TransportRouting.roadRoute world PrivateCar origin destination |> Option.get
+
+        Assert.Equal<RoadSegmentId list>(mapGraphPath.Steps |> List.map _.Segment.Id, route.Segments |> List.map _.Id)
+        Assert.Equal<RoadNodeId list>(mapGraphPath.NodePath, route.NodePath)
+
+    [<Fact>]
+    let ``ExistingScenarioStillRunsOneTick`` () =
+        let world = TestWorld.create () |> TestWorld.tick 1
+
+        Invariants.checkWorld world |> ignore
 
     [<Fact>]
     let ``ModeChoiceIncludesDecisionReasons`` () =
@@ -279,7 +618,7 @@ module TransportAndDecisionTests =
         let result = world |> privateCarTripWorld origin destination |> Transport.tick 15
         let route = firstCurrentRoute result
 
-        Assert.Contains(express.Id, route.SegmentIds)
+        Assert.Contains(express.Id, TransportRoute.segmentIds route)
         Invariants.checkWorld result |> ignore
 
     [<Fact>]
@@ -306,8 +645,8 @@ module TransportAndDecisionTests =
         let result = congested |> privateCarTripWorld origin destination |> Transport.tick 15
         let route = firstCurrentRoute result
 
-        Assert.Contains(localDetour.Id, route.SegmentIds)
-        Assert.DoesNotContain(highway.Id, route.SegmentIds)
+        Assert.Contains(localDetour.Id, TransportRoute.segmentIds route)
+        Assert.DoesNotContain(highway.Id, TransportRoute.segmentIds route)
         Invariants.checkWorld result |> ignore
 
     [<Fact>]
@@ -422,10 +761,10 @@ module TransportAndDecisionTests =
             |> Transport.tick 1
             |> firstCurrentRoute
 
-        Assert.Contains(fastA.Id, withoutDelay.SegmentIds)
-        Assert.Contains(fastB.Id, withoutDelay.SegmentIds)
-        Assert.Contains(slowA.Id, withDelay.SegmentIds)
-        Assert.Contains(slowB.Id, withDelay.SegmentIds)
+        Assert.Contains(fastA.Id, TransportRoute.segmentIds withoutDelay)
+        Assert.Contains(fastB.Id, TransportRoute.segmentIds withoutDelay)
+        Assert.Contains(slowA.Id, TransportRoute.segmentIds withDelay)
+        Assert.Contains(slowB.Id, TransportRoute.segmentIds withDelay)
 
     [<Fact>]
     let ``SameSeedProducesSameIntersectionRouting`` () =
@@ -489,7 +828,7 @@ module TransportAndDecisionTests =
         let transit = world.Transport.TransitRoutes[route.TransitRouteId.Value]
         let segmentById = world.Map.RoadSegments |> List.map (fun segment -> segment.Id, segment) |> Map.ofList
         let freeFlowRoadMinutes =
-            route.SegmentIds
+            TransportRoute.segmentIds route
             |> List.sumBy (fun segmentId ->
                 let segment = segmentById[segmentId]
                 int (Math.Ceiling((segment.LengthMeters / 1000.0) / segment.SpeedKph * 60.0)))
@@ -544,12 +883,14 @@ module TransportAndDecisionTests =
 
     [<Fact>]
     let ``StartingTripCreatesVehiclePosition`` () =
-        let world = morningWorld ()
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let world = initial |> privateCarTripWorld origin destination |> Transport.tick 0
         let vehicle = firstVehicle world
 
         match vehicle.CurrentPosition with
         | OnRoadSegment(segmentId, laneId, progress) ->
-            Assert.Contains(segmentId, vehicle.Trip |> fun tripId -> world.Transport.Trips[tripId].CurrentRoute.Value.SegmentIds)
+            Assert.Contains(segmentId, vehicle.Trip |> fun tripId -> TransportRoute.segmentIds world.Transport.Trips[tripId].CurrentRoute.Value)
             Assert.True(laneId.IsSome)
             Assert.InRange(progress, 0.0, 1.0)
         | WaitingAtIntersection _ -> Assert.True(true)
@@ -584,7 +925,15 @@ module TransportAndDecisionTests =
         let world = morningWorld ()
         let vehicle = firstVehicle world
         let route = world.Transport.Trips[vehicle.Trip].CurrentRoute.Value
-        let zeroDelayRoute = { route with IntersectionDelayMinutes = route.IntersectionDelayMinutes |> List.map (fun _ -> 0) }
+        let zeroDelayRoute =
+            { route with
+                Legs =
+                    route.Legs
+                    |> List.map (fun leg ->
+                        if leg.SegmentId.IsSome then
+                            { leg with IntersectionDelayMinutes = 0; ExpectedMinutes = leg.SegmentTravelMinutes }
+                        else
+                            leg) }
         let trip = world.Transport.Trips[vehicle.Trip]
 
         let prepared =
@@ -593,7 +942,8 @@ module TransportAndDecisionTests =
                     { world.Transport with
                         Trips = Map.add vehicle.Trip { trip with CurrentRoute = Some zeroDelayRoute; PlannedRoute = Some zeroDelayRoute } world.Transport.Trips } }
             |> withFirstVehicle (fun vehicle ->
-                let firstSegment = zeroDelayRoute.SegmentIds[0]
+                let segmentIds = TransportRoute.segmentIds zeroDelayRoute
+                let firstSegment = segmentIds[0]
                 { vehicle with
                     CurrentPosition = OnRoadSegment(firstSegment, vehicle.CurrentLane, 0.99)
                     CurrentRouteIndex = Some 0
@@ -602,7 +952,7 @@ module TransportAndDecisionTests =
         let moved = prepared |> Transport.tick 1 |> firstVehicle
 
         match moved.CurrentPosition with
-        | OnRoadSegment(segmentId, _, _) -> Assert.Equal(zeroDelayRoute.SegmentIds[1], segmentId)
+        | OnRoadSegment(segmentId, _, _) -> Assert.Equal((TransportRoute.segmentIds zeroDelayRoute)[1], segmentId)
         | other -> Assert.Fail($"Expected next segment, got {other}.")
 
     [<Fact>]
@@ -615,7 +965,7 @@ module TransportAndDecisionTests =
             world
             |> withFirstVehicle (fun vehicle ->
                 { vehicle with
-                    CurrentPosition = OnRoadSegment(route.SegmentIds[0], vehicle.CurrentLane, 0.99)
+                    CurrentPosition = OnRoadSegment((TransportRoute.segmentIds route)[0], vehicle.CurrentLane, 0.99)
                     CurrentRouteIndex = Some 0
                     Status = VehicleMoving })
 
@@ -630,13 +980,14 @@ module TransportAndDecisionTests =
         let world = morningWorld ()
         let vehicle = firstVehicle world
         let route = world.Transport.Trips[vehicle.Trip].CurrentRoute.Value
-        let lastIndex = route.SegmentIds.Length - 1
+        let segmentIds = TransportRoute.segmentIds route
+        let lastIndex = segmentIds.Length - 1
 
         let prepared =
             world
             |> withFirstVehicle (fun vehicle ->
                 { vehicle with
-                    CurrentPosition = OnRoadSegment(route.SegmentIds[lastIndex], vehicle.CurrentLane, 0.99)
+                    CurrentPosition = OnRoadSegment(segmentIds[lastIndex], vehicle.CurrentLane, 0.99)
                     CurrentRouteIndex = Some lastIndex
                     Status = VehicleMoving })
 
@@ -645,7 +996,7 @@ module TransportAndDecisionTests =
         let frame = TrafficVisualization.getTrafficFrame completed
 
         Assert.True(completedVehicle.Status = VehicleCompleted || completedVehicle.Status = VehicleParked)
-        Assert.DoesNotContain(frame.RoadSegments, fun segment -> segment.ActiveVehicleCount > 0 && segment.SegmentId = route.SegmentIds[lastIndex])
+        Assert.DoesNotContain(frame.RoadSegmentTrafficViews, fun segment -> segment.ActiveVehicleCount > 0 && segment.SegmentId = segmentIds[lastIndex])
 
     [<Fact>]
     let ``VehiclePositionIsDeterministic`` () =
@@ -668,12 +1019,28 @@ module TransportAndDecisionTests =
         Assert.Equal(positions (), positions ())
 
     [<Fact>]
-    let ``TrafficFrameContainsActiveVehicles`` () =
-        let world = morningWorld ()
+    let ``TrafficFrameContainsActiveVehiclesAndPedestrians`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let carWorld = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let vehicleMovement = firstMovement carWorld
+        let simId = carWorld.Sims |> Map.toSeq |> Seq.head |> fst
+        let pedestrianMovement =
+            { vehicleMovement with
+                Id = MovementId(guid 9101)
+                Kind = MovingEntityKind.Pedestrian simId
+                CurrentSpeedKph = 4.5 }
+        let world =
+            { carWorld with
+                Transport =
+                    { carWorld.Transport with
+                        Movements = Map.add pedestrianMovement.Id pedestrianMovement carWorld.Transport.Movements } }
         let frame = TrafficVisualization.getTrafficFrame world
 
+        Assert.NotEmpty(frame.MovingEntities)
         Assert.NotEmpty(frame.Vehicles)
-        Assert.Contains(frame.Vehicles, fun vehicle -> vehicle.SegmentId.IsSome || vehicle.IntersectionId.IsSome)
+        Assert.NotEmpty(frame.Pedestrians)
+        Assert.All(frame.MovingEntities, fun entity -> Assert.NotEmpty(entity.RoutePreview))
 
     [<Fact>]
     let ``TrafficFrameCanQueryVehiclesBySegment`` () =
@@ -691,10 +1058,20 @@ module TransportAndDecisionTests =
             |> fst
 
         let world = initial |> privateCarTripWorld origin destination |> Transport.tick 0
-        let vehicle = TrafficVisualization.getTrafficFrame world |> _.Vehicles |> List.find (fun vehicle -> vehicle.SegmentId.IsSome)
-        let onSegment = TrafficVisualization.getVehiclesOnRoadSegment world vehicle.SegmentId.Value
+        let movement = firstMovement world
+        let segmentIndex, segmentId =
+            movement.Route.Legs
+            |> List.indexed
+            |> List.pick (fun (index, leg) -> leg.SegmentId |> Option.map (fun segmentId -> index, segmentId))
+        let preparedMovement = { movement with CurrentLegIndex = segmentIndex }
+        let prepared =
+            { world with
+                Transport =
+                    { world.Transport with
+                        Movements = Map.add movement.Id preparedMovement world.Transport.Movements } }
+        let onSegment = TrafficVisualization.getVehiclesOnRoadSegment prepared segmentId
 
-        Assert.Contains(onSegment, fun candidate -> candidate.VehicleId = vehicle.VehicleId)
+        Assert.Contains(onSegment, fun candidate -> candidate.MovementId = movement.Id && candidate.VehicleId.IsSome)
 
     [<Fact>]
     let ``TrafficFrameDiffReportsUpdatedVehicle`` () =
@@ -720,6 +1097,70 @@ module TransportAndDecisionTests =
         Assert.NotEmpty(diff.UpdatedVehicles)
 
     [<Fact>]
+    let ``TrafficFrameUsesMovementStatePositions`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let world = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement world
+        let frame = TrafficVisualization.getTrafficFrame world
+        let entity = frame.MovingEntities |> List.find (fun entity -> entity.MovementId = movement.Id)
+
+        Assert.Equal(movement.CurrentPosition.X, entity.CurrentPosition.X, 6)
+        Assert.Equal(movement.CurrentPosition.Y, entity.CurrentPosition.Y, 6)
+        Assert.Equal(movement.PreviousPosition, entity.PreviousPosition)
+
+    [<Fact>]
+    let ``TrafficVisualizationDoesNotReconstructRoutesIndependently`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let routePreview = [ { X = 11.0; Y = 22.0 }; { X = 33.0; Y = 44.0 }; { X = 55.0; Y = 66.0 } ]
+        let route = { movement.Route with Legs = []; Geometry = { Polyline = routePreview; DistanceMeters = 70.0 } }
+        let edited = { movement with Route = route; CurrentPosition = routePreview[1]; PreviousPosition = Some routePreview[0] }
+        let world = { started with Transport = { started.Transport with Movements = Map.add movement.Id edited started.Transport.Movements } }
+        let frame = TrafficVisualization.getTrafficFrame world
+        let entity = frame.MovingEntities |> List.find (fun entity -> entity.MovementId = movement.Id)
+
+        Assert.Equal(sprintf "%A" routePreview, sprintf "%A" entity.RoutePreview)
+        Assert.Equal(routePreview[1], entity.CurrentPosition)
+        Assert.DoesNotContain(frame.RoadSegmentTrafficViews, fun segment -> segment.ActiveVehicleCount > 0)
+
+    [<Fact>]
+    let ``AvaloniaProjectionUsesTrafficFrameMovement`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let routePreview = movement.Route.Geometry.Polyline
+        let destinationPoint = routePreview |> List.last
+        let edited = { movement with CurrentPosition = destinationPoint; Progress = 0.0 }
+        let world = { started with Transport = { started.Transport with Movements = Map.add movement.Id edited started.Transport.Movements } }
+        let projection = MapProjection.Project world
+        let entity = projection.MovingEntities |> Seq.find (fun entity -> entity.Id = movement.Id.ToString())
+
+        Assert.Equal(entity.Destination.X, entity.CurrentPosition.X, 6)
+        Assert.Equal(entity.Destination.Y, entity.CurrentPosition.Y, 6)
+
+    [<Fact>]
+    let ``SelectedVehicleCanExposeCurrentPosition`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let world = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement world
+        let vehicleId =
+            match movement.Kind with
+            | MovingEntityKind.Vehicle vehicleId -> vehicleId
+            | MovingEntityKind.EmergencyResponder vehicleId
+            | MovingEntityKind.FreightVehicle vehicleId
+            | MovingEntityKind.ServiceVehicle vehicleId -> vehicleId
+            | other -> failwithf "Expected vehicle movement, got %A" other
+        let view = TrafficVisualization.getVehicleView world vehicleId |> Option.get
+
+        Assert.Equal(movement.CurrentPosition.X, view.Position.RenderX, 6)
+        Assert.Equal(movement.CurrentPosition.Y, view.Position.RenderY, 6)
+
+    [<Fact>]
     let ``VehicleRenderPositionComesFromRoadGeometry`` () =
         let initial = TestWorld.create ()
         let origin =
@@ -737,13 +1178,10 @@ module TransportAndDecisionTests =
         let world = initial |> privateCarTripWorld origin destination |> Transport.tick 0
         let vehicle = firstVehicle world
         let frameVehicle = TrafficVisualization.getVehicleView world vehicle.Id |> Option.get
-        let route = world.Transport.Trips[vehicle.Trip].CurrentRoute.Value
-        let segment = world.Map.RoadSegments |> List.find (fun segment -> segment.Id = route.SegmentIds[0])
-        let expectedStart = world.Map.RoadNodes[route.NodePath[0]].Position
+        let movement = firstMovement world
 
-        Assert.Equal(segment.Id, frameVehicle.SegmentId.Value)
-        Assert.Equal(expectedStart.X, frameVehicle.Position.RenderX, 6)
-        Assert.Equal(expectedStart.Y, frameVehicle.Position.RenderY, 6)
+        Assert.Equal(movement.CurrentPosition.X, frameVehicle.Position.RenderX, 6)
+        Assert.Equal(movement.CurrentPosition.Y, frameVehicle.Position.RenderY, 6)
 
     [<Fact>]
     let ``DriverDoesNotChooseExitLaneTwentyMilesEarly`` () =

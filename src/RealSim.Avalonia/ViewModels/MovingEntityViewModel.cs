@@ -17,6 +17,11 @@ public sealed partial class MovingEntityViewModel : ObservableObject
         Mode = projection.Mode;
         Purpose = projection.Purpose;
         Status = projection.Status;
+        Origin = projection.Origin;
+        DestinationName = projection.DestinationName;
+        Eta = projection.Eta;
+        SpeedKph = projection.SpeedKph;
+        DelaySeconds = projection.DelaySeconds;
         PreviousPosition = projection.CurrentPosition;
         CurrentPosition = projection.CurrentPosition;
         Destination = projection.Destination;
@@ -58,7 +63,27 @@ public sealed partial class MovingEntityViewModel : ObservableObject
     private string status = "";
 
     [ObservableProperty]
+    private string origin = "";
+
+    [ObservableProperty]
+    private string destinationName = "";
+
+    [ObservableProperty]
+    private string eta = "";
+
+    [ObservableProperty]
+    private double speedKph;
+
+    [ObservableProperty]
+    private int delaySeconds;
+
+    [ObservableProperty]
     private bool isApproximate;
+
+    public bool IsDelayedOrBlocked =>
+        Status.Contains("Delayed", StringComparison.OrdinalIgnoreCase) ||
+        Status.Contains("Blocked", StringComparison.OrdinalIgnoreCase) ||
+        Status.Contains("Waiting", StringComparison.OrdinalIgnoreCase);
 
     public DateTime LastUpdatedUtc { get; private set; }
 
@@ -73,8 +98,14 @@ public sealed partial class MovingEntityViewModel : ObservableObject
         Mode = projection.Mode;
         Purpose = projection.Purpose;
         Status = projection.Status;
+        Origin = projection.Origin;
+        DestinationName = projection.DestinationName;
+        Eta = projection.Eta;
+        SpeedKph = projection.SpeedKph;
+        DelaySeconds = projection.DelaySeconds;
         IsApproximate = projection.IsApproximate;
         LastUpdatedUtc = DateTime.UtcNow;
+        OnPropertyChanged(nameof(IsDelayedOrBlocked));
     }
 
     public MapPoint Interpolate(DateTime utcNow)

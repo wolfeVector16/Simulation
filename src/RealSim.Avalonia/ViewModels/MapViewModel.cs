@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using RealSim.Avalonia.Models;
 
 namespace RealSim.Avalonia.ViewModels;
@@ -40,13 +41,25 @@ public sealed partial class MapViewModel : ObservableObject
     private bool showSims = true;
 
     [ObservableProperty]
+    private bool showPedestrians = true;
+
+    [ObservableProperty]
     private bool showVehicles = true;
+
+    [ObservableProperty]
+    private bool showRoutes = true;
+
+    [ObservableProperty]
+    private bool showTraffic = true;
 
     [ObservableProperty]
     private bool showEvents = true;
 
     [ObservableProperty]
     private bool showLabels = true;
+
+    [ObservableProperty]
+    private bool isFollowingSelectedMovement;
 
     public ObservableCollection<MovingEntityViewModel> MovingEntities { get; } = new();
 
@@ -72,6 +85,11 @@ public sealed partial class MapViewModel : ObservableObject
             SelectedPrimitive = null;
         }
 
+        if (value is null)
+        {
+            IsFollowingSelectedMovement = false;
+        }
+
         MovingSelectionChanged?.Invoke(value);
     }
 
@@ -86,6 +104,11 @@ public sealed partial class MapViewModel : ObservableObject
         SelectedMovingEntity = SelectedMovingEntity is null
             ? null
             : MovingEntities.FirstOrDefault(entity => entity.Id == SelectedMovingEntity.Id);
+
+        if (IsFollowingSelectedMovement)
+        {
+            CenterOnSelectedMovement();
+        }
     }
 
     public IEnumerable<MapPrimitive> VisiblePrimitives => Primitives.Where(IsVisible);
@@ -94,10 +117,12 @@ public sealed partial class MapViewModel : ObservableObject
     {
         return primitive.Kind switch
         {
-            MapPrimitiveKind.Road or MapPrimitiveKind.RoadStatus => ShowRoads,
+            MapPrimitiveKind.Road => ShowRoads,
+            MapPrimitiveKind.RoadStatus => ShowRoads && ShowTraffic,
             MapPrimitiveKind.Building or MapPrimitiveKind.Parcel or MapPrimitiveKind.Place or MapPrimitiveKind.Household or MapPrimitiveKind.Institution => ShowBuildings,
             MapPrimitiveKind.TransitRoute => ShowTransit,
-            MapPrimitiveKind.ActiveRoute or MapPrimitiveKind.Destination => ShowSims || ShowVehicles,
+            MapPrimitiveKind.ActiveRoute or MapPrimitiveKind.Destination => ShowRoutes,
+            MapPrimitiveKind.MovingEntity => false,
             MapPrimitiveKind.EventMarker => ShowEvents,
             _ => true
         };
@@ -107,10 +132,12 @@ public sealed partial class MapViewModel : ObservableObject
     {
         return entity.Kind switch
         {
-            MovingEntityKind.Pedestrian or MovingEntityKind.Bike or MovingEntityKind.Sim => ShowSims,
+            MovingEntityKind.Pedestrian or MovingEntityKind.Bike or MovingEntityKind.Sim => ShowPedestrians,
             _ => ShowVehicles
         };
     }
+
+    public bool AreRoutesVisible => ShowRoutes;
 
     public void ZoomBy(double factor)
     {
@@ -128,6 +155,7 @@ public sealed partial class MapViewModel : ObservableObject
         Zoom = 1.0;
         PanX = 0.0;
         PanY = 0.0;
+        IsFollowingSelectedMovement = false;
     }
 
     public MapPrimitive? SelectAt(double x, double y, double tolerance)
@@ -148,6 +176,36 @@ public sealed partial class MapViewModel : ObservableObject
     public void SelectMovingEntity(MovingEntityViewModel entity)
     {
         SelectedMovingEntity = entity;
+    }
+
+    [RelayCommand]
+    public void FollowSelectedMovement()
+    {
+        if (SelectedMovingEntity is null)
+        {
+            return;
+        }
+
+        IsFollowingSelectedMovement = true;
+        CenterOnSelectedMovement();
+    }
+
+    [RelayCommand]
+    public void StopFollowing()
+    {
+        IsFollowingSelectedMovement = false;
+    }
+
+    public void CenterOnSelectedMovement()
+    {
+        if (SelectedMovingEntity is null)
+        {
+            return;
+        }
+
+        var position = SelectedMovingEntity.CurrentPosition;
+        PanX = 500.0 - position.X * Zoom;
+        PanY = 350.0 - position.Y * Zoom;
     }
 
     public MovingEntityViewModel? MovingEntityAt(double x, double y, double tolerance)
