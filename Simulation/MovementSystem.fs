@@ -44,7 +44,12 @@ module MovementSystem =
     let private headingBetween (a: Coordinates) (b: Coordinates) =
         Math.Atan2(b.Y - a.Y, b.X - a.X)
 
-    let private speedFor (movement: MovementState) =
+    let private currentSegmentId (movement: MovementState) =
+        movement.Route.Legs
+        |> List.tryItem movement.CurrentLegIndex
+        |> Option.bind _.SegmentId
+
+    let private freeFlowSpeedFor (movement: MovementState) =
         if movement.CurrentSpeedKph > 0.0 then movement.CurrentSpeedKph
         else
             match movement.Route.Mode with
@@ -60,6 +65,19 @@ module MovementSystem =
             | ServiceVehicle -> 30.0
             | _ -> 35.0
 
+    let private speedFor (world: World) (movement: MovementState) =
+        let freeFlow = freeFlowSpeedFor movement
+
+        match currentSegmentId movement with
+        | Some segmentId when movement.Route.Mode <> Walk ->
+            let congestion =
+                world.Transport.SegmentCongestion
+                |> Map.tryFind segmentId
+                |> Option.defaultValue 0.0
+
+            freeFlow * (1.0 - min 0.75 (congestion * 0.55))
+        | _ -> freeFlow
+
     let private routeDistance (movement: MovementState) =
         legStartDistance movement.Route movement.CurrentLegIndex + movement.DistanceOnLegMeters
 
@@ -68,7 +86,7 @@ module MovementSystem =
         || movement.Route.Geometry.Polyline.Length < 2
         || movement.Route.TotalDistanceMeters <= 0.0
 
-    let private advanceMovement minutes (movement: MovementState) : MovementState * TransportEvent list =
+    let private advanceMovement minutes world (movement: MovementState) : MovementState * TransportEvent list =
         if not (active movement.Status) then
             movement, []
         elif blockedByInvalidGeometry movement then
@@ -80,7 +98,8 @@ module MovementSystem =
             [ MovementFailed(movement.Id, movement.TripId) ]
         else
             let previousPosition = movement.CurrentPosition
-            let meters = speedFor movement * 1000.0 / 60.0 * float minutes
+            let currentSpeed = speedFor world movement
+            let meters = currentSpeed * 1000.0 / 60.0 * float minutes
             let targetDistance = min movement.Route.TotalDistanceMeters (routeDistance movement + max 0.0 meters)
             let nextPosition = positionAtRouteDistance movement.Route targetDistance
 
@@ -107,7 +126,7 @@ module MovementSystem =
                     CurrentPosition = position
                     PreviousPosition = Some previousPosition
                     HeadingRadians = heading
-                    CurrentSpeedKph = if completed then 0.0 else speedFor movement
+                    CurrentSpeedKph = if completed then 0.0 else currentSpeed
                     Status = if completed then MovementStatus.Completed else MovementStatus.InProgress },
                 [ if completed then MovementCompleted(movement.Id, movement.TripId) ]
 
@@ -165,7 +184,7 @@ module MovementSystem =
             world.Transport.Movements
             |> Map.toSeq
             |> Seq.map (fun (movementId, (movement: MovementState)) ->
-                let movement, events = advanceMovement minutes movement
+                let movement, events = advanceMovement minutes world movement
                 movementId, movement, events)
             |> Seq.toList
 

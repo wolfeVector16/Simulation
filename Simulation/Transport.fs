@@ -719,45 +719,7 @@ module Transport =
             RecentEvents = completedEvents @ startedEvents }
 
     let private updateLaneState world transport =
-        let demandBySegment =
-            transport.Vehicles
-            |> Map.toSeq
-            |> Seq.choose (fun (_, vehicle) ->
-                match vehicle.Status, vehicle.CurrentPosition with
-                | VehicleMoving, OnRoadSegment(segmentId, _, _)
-                | VehicleQueued, OnRoadSegment(segmentId, _, _)
-                | VehicleWaitingAtIntersection, OnRoadSegment(segmentId, _, _) -> Some segmentId
-                | _ -> None)
-            |> Seq.countBy id
-            |> Map.ofSeq
-
-        let segmentById = world.Map.RoadSegments |> List.map (fun segment -> segment.Id, segment) |> Map.ofList
-
-        let congestion =
-            world.Map.RoadSegments
-            |> List.map (fun segment ->
-                let demand = demandBySegment |> Map.tryFind segment.Id |> Option.defaultValue 0 |> float
-                let capacity = max 1.0 (float segment.CapacityPerMinute * 15.0)
-                segment.Id, clamp01 (demand / capacity + if segment.UnderConstruction then 0.25 else 0.0))
-            |> Map.ofList
-
-        let lanes =
-            transport.Lanes
-            |> Map.map (fun _ lane ->
-                let segment = Map.tryFind lane.SegmentId segmentById
-                let c = congestion |> Map.tryFind lane.SegmentId |> Option.defaultValue 0.0
-                let baseSpeed = segment |> Option.map _.SpeedKph |> Option.defaultValue lane.CurrentSpeedKph
-                let speed = baseSpeed * (1.0 - min 0.80 (c * 0.65))
-
-                { lane with
-                    CurrentDensity = c
-                    CurrentSpeedKph = max 3.0 speed
-                    QueueLength = int (c * 20.0)
-                    Blocked = c > 0.95 })
-
-        { transport with
-            Lanes = lanes
-            SegmentCongestion = congestion }
+        TrafficSystem.updateTransportState world transport
 
     let private updateParkingState transport =
         let activeCarArrivals =
@@ -837,6 +799,11 @@ module Transport =
 
         let metrics =
             { AverageCongestion = averageCongestion
+              ActiveVehicleCount = transport.Metrics.ActiveVehicleCount
+              ActivePedestrianCount = transport.Metrics.ActivePedestrianCount
+              AverageSegmentSpeedKph = transport.Metrics.AverageSegmentSpeedKph
+              QueuedVehicleCount = transport.Metrics.QueuedVehicleCount
+              IntersectionWaitingCount = transport.Metrics.IntersectionWaitingCount
               AverageTravelReliability = transitReliability * 0.45 + (1.0 - averageCongestion) * 0.55
               AverageParkingPressure = parkingPressure
               TransitTrust = transitReliability
@@ -901,6 +868,9 @@ module Transport =
         let world =
             { world with Transport = transport }
             |> MovementSystem.tick minutes
+
+        let world =
+            { world with Transport = TrafficSystem.updateTransportState world world.Transport }
 
         let routeCalculations =
             world.Transport.RecentEvents
@@ -1043,10 +1013,9 @@ module TrafficVisualization =
             |> List.filter (fun movement -> currentSegmentId movement = Some segment.Id && (vehicleIdOfKind movement.Kind).IsSome)
 
         let averageSpeed =
-            onSegment
-            |> List.map _.CurrentSpeedKph
-            |> List.append [ 0.0 ]
-            |> List.average
+            match onSegment with
+            | [] -> 0.0
+            | vehicles -> vehicles |> List.averageBy _.CurrentSpeedKph
 
         let queueLength =
             world.Transport.Lanes
@@ -1088,10 +1057,9 @@ module TrafficVisualization =
             |> List.filter (fun movement -> currentIntersectionId movement = Some nodeId && (vehicleIdOfKind movement.Kind).IsSome)
 
         let averageDelay =
-            waiting
-            |> List.map (fun movement -> float movement.DelaySeconds)
-            |> List.append [ 0.0 ]
-            |> List.average
+            match waiting with
+            | [] -> 0.0
+            | vehicles -> vehicles |> List.averageBy (fun movement -> float movement.DelaySeconds)
 
         let position =
             world.Map.RoadNodes

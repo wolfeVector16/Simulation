@@ -357,6 +357,11 @@ type AccessProfile =
       OpportunityAccess: float }
 type TransportMetrics =
     { AverageCongestion: float
+      ActiveVehicleCount: int
+      ActivePedestrianCount: int
+      AverageSegmentSpeedKph: float
+      QueuedVehicleCount: int
+      IntersectionWaitingCount: int
       AverageTravelReliability: float
       AverageParkingPressure: float
       TransitTrust: float

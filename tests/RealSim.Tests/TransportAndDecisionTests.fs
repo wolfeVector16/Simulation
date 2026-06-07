@@ -1043,6 +1043,138 @@ module TransportAndDecisionTests =
         Assert.All(frame.MovingEntities, fun entity -> Assert.NotEmpty(entity.RoutePreview))
 
     [<Fact>]
+    let ``SegmentCongestionReflectsActiveVehicleCount`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let segmentIndex, segmentId =
+            movement.Route.Legs
+            |> List.indexed
+            |> List.pick (fun (index, leg) -> leg.SegmentId |> Option.map (fun segmentId -> index, segmentId))
+        let copy =
+            { movement with
+                Id = MovementId(guid 9201)
+                CurrentLegIndex = segmentIndex
+                CurrentSpeedKph = 18.0 }
+        let original =
+            { movement with
+                CurrentLegIndex = segmentIndex
+                CurrentSpeedKph = 30.0 }
+        let prepared =
+            { started with
+                Transport =
+                    { started.Transport with
+                        Movements =
+                            started.Transport.Movements
+                            |> Map.add original.Id original
+                            |> Map.add copy.Id copy } }
+        let updated = { prepared with Transport = TrafficSystem.updateTransportState prepared prepared.Transport }
+        let segment = updated.Map.RoadSegments |> List.find (fun segment -> segment.Id = segmentId)
+        let expected = 2.0 / max 1.0 (float segment.CapacityPerMinute * 15.0)
+
+        Assert.Equal(expected, updated.Transport.SegmentCongestion[segmentId], 6)
+        Assert.Equal(2, updated.Transport.Metrics.ActiveVehicleCount)
+
+    [<Fact>]
+    let ``IntersectionWaitingCountReflectsMovements`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let segmentIndex, nodeId =
+            movement.Route.Legs
+            |> List.indexed
+            |> List.pick (fun (index, leg) -> leg.SegmentId |> Option.bind (fun _ -> leg.ToRoadNode |> Option.map (fun nodeId -> index, nodeId)))
+        let preparedWorld = started |> addIntersection nodeId StopSign 0.0 0.0
+        let waiting =
+            { movement with
+                CurrentLegIndex = segmentIndex
+                Status = MovementStatus.WaitingAtIntersection
+                CurrentSpeedKph = 0.0
+                DelaySeconds = 75 }
+        let prepared =
+            { preparedWorld with
+                Transport =
+                    { preparedWorld.Transport with
+                        Movements = Map.add waiting.Id waiting preparedWorld.Transport.Movements } }
+        let updated = { prepared with Transport = TrafficSystem.updateTransportState prepared prepared.Transport }
+        let frame = TrafficVisualization.getTrafficFrame updated
+        let view = frame.IntersectionTrafficViews |> List.find (fun view -> view.IntersectionId = nodeId)
+
+        Assert.Equal(1, updated.Transport.Metrics.IntersectionWaitingCount)
+        Assert.Equal(1, view.WaitingVehicleCount)
+
+    [<Fact>]
+    let ``TrafficSystemDoesNotRoute`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let beforeDiagnostics = started.PerformanceDiagnostics
+        let beforeTrips = started.Transport.Trips
+        let beforeEvents = started.Transport.RecentEvents
+        let updated = { started with Transport = TrafficSystem.updateTransportState started started.Transport }
+
+        Assert.Equal(beforeDiagnostics, updated.PerformanceDiagnostics)
+        Assert.True((beforeTrips = updated.Transport.Trips))
+        Assert.True((beforeEvents = updated.Transport.RecentEvents))
+
+    [<Fact>]
+    let ``TrafficFrameRoadViewsMatchMovementOccupancy`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let segmentIndex, segmentId =
+            movement.Route.Legs
+            |> List.indexed
+            |> List.pick (fun (index, leg) -> leg.SegmentId |> Option.map (fun segmentId -> index, segmentId))
+        let movementA = { movement with CurrentLegIndex = segmentIndex; CurrentSpeedKph = 20.0 }
+        let movementB = { movementA with Id = MovementId(guid 9301); CurrentSpeedKph = 40.0 }
+        let prepared =
+            { started with
+                Transport =
+                    { started.Transport with
+                        Movements =
+                            started.Transport.Movements
+                            |> Map.add movementA.Id movementA
+                            |> Map.add movementB.Id movementB } }
+        let updated = { prepared with Transport = TrafficSystem.updateTransportState prepared prepared.Transport }
+        let frame = TrafficVisualization.getTrafficFrame updated
+        let roadView = frame.RoadSegmentTrafficViews |> List.find (fun view -> view.SegmentId = segmentId)
+
+        Assert.Equal(2, roadView.ActiveVehicleCount)
+        Assert.Equal(30.0, roadView.AverageSpeedKph, 6)
+        Assert.Equal(updated.Transport.SegmentCongestion[segmentId], roadView.Congestion)
+
+    [<Fact>]
+    let ``MovementSpeedAffectedByCongestionIfEnabled`` () =
+        let initial = TestWorld.create ()
+        let origin, destination = routedPlacePair initial
+        let started = initial |> privateCarTripWorld origin destination |> Transport.tick 0
+        let movement = firstMovement started
+        let segmentIndex, segmentId =
+            movement.Route.Legs
+            |> List.indexed
+            |> List.pick (fun (index, leg) -> leg.SegmentId |> Option.map (fun segmentId -> index, segmentId))
+        let preparedMovement = { movement with CurrentLegIndex = segmentIndex; DistanceOnLegMeters = 0.0; Progress = 0.0 }
+        let prepared =
+            { started with
+                Transport =
+                    { started.Transport with
+                        Movements = Map.add preparedMovement.Id preparedMovement started.Transport.Movements } }
+        let uncongested = prepared |> MovementSystem.tick 1 |> firstMovement
+        let congestedWorld =
+            { prepared with
+                Transport =
+                    { prepared.Transport with
+                        SegmentCongestion = Map.add segmentId 1.0 prepared.Transport.SegmentCongestion } }
+        let congested = congestedWorld |> MovementSystem.tick 1 |> firstMovement
+
+        Assert.True(congested.CurrentSpeedKph < uncongested.CurrentSpeedKph)
+        Assert.True(congested.Progress < uncongested.Progress)
+
+    [<Fact>]
     let ``TrafficFrameCanQueryVehiclesBySegment`` () =
         let initial = TestWorld.create ()
         let origin =

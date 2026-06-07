@@ -1453,6 +1453,11 @@ module Juniper =
 
         let transportMetrics =
             { AverageCongestion = 0.0
+              ActiveVehicleCount = 0
+              ActivePedestrianCount = 0
+              AverageSegmentSpeedKph = 0.0
+              QueuedVehicleCount = 0
+              IntersectionWaitingCount = 0
               AverageTravelReliability = 0.65
               AverageParkingPressure = 0.0
               TransitTrust = 0.62

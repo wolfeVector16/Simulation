@@ -61,6 +61,7 @@
     <Compile Include="LifeSim.fs" />
     <Compile Include="Diagnostics.fs" />
     <Compile Include="MovementSystem.fs" />
+    <Compile Include="TrafficSystem.fs" />
     <Compile Include="Transport.fs" />
     <Compile Include="WorldIndexes.fs" />
     <Compile Include="WorldGeneration.fs" />
