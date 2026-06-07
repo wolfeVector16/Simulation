@@ -47,7 +47,7 @@ module MapGraph =
 
     let private roadNodeName (RoadNodeId id) =
         let shortId = id.ToString("N")[0..7]
-        $"road node {shortId}"
+        $"road node %s{shortId}"
 
     let private segmentLength (cityMap: CityMap) (segment: RoadSegment) =
         if segment.LengthMeters > 0.0 then
@@ -108,9 +108,9 @@ module MapGraph =
 
             match current with
             | None -> None
-            | Some (node, distance) when node = destinationNode ->
+            | Some (node, _) when node = destinationNode ->
                 Some (distances, previous)
-            | Some (node, distance) when Double.IsPositiveInfinity distance ->
+            | Some (_, distance) when Double.IsPositiveInfinity distance ->
                 None
             | Some (node, distance) ->
                 let unvisited = Set.remove node unvisited
@@ -184,7 +184,7 @@ module MapGraph =
 
                     let roadLegs =
                         roadSteps
-                        |> List.map (fun (fromNode, toNode, segment, length, minutes) ->
+                        |> List.map (fun (fromNode, toNode, _, length, minutes) ->
                             { Mode = Road
                               FromName = roadNodeName fromNode
                               ToName = roadNodeName toNode

@@ -56,7 +56,7 @@ module Diagnostics =
             |> Seq.map (fun (_, household) ->
                 let broken =
                     household.Objects
-                    |> List.filter _.Broken
+                    |> List.filter (fun obj -> obj.Broken)
                     |> List.length
                     |> float
 

@@ -49,7 +49,7 @@ module WorldGeneration =
             |> Seq.choose (fun householdId ->
                 match Map.tryFind householdId world.Households with
                 | Some household when not (placeHasAccess world household.Home) ->
-                    Some(finding (ImplausibleCommutePattern householdId) ValidationStatus.Failed $"{household.Name} occupies housing without road or pedestrian access." (Some "Assign the household to a unit with access or generate a pedestrian connector."))
+                    Some(finding (ImplausibleCommutePattern householdId) ValidationStatus.Failed $"%s{household.Name} occupies housing without road or pedestrian access." (Some "Assign the household to a unit with access or generate a pedestrian connector."))
                 | _ -> None))
         |> Seq.toList
 
@@ -60,9 +60,9 @@ module WorldGeneration =
             match sim.LifeStage, sim.School with
             | Child, None
             | Teen, None ->
-                Some(finding (UnreachableSchool sim.Household) ValidationStatus.Failed $"{sim.Name} is school-aged but has no school assignment." (Some "Assign a catchment school or mark explicit lack of access."))
+                Some(finding (UnreachableSchool sim.Household) ValidationStatus.Failed $"%s{sim.Name} is school-aged but has no school assignment." (Some "Assign a catchment school or mark explicit lack of access."))
             | (Child | Teen), Some school when not (placeHasAccess world school.School) ->
-                Some(finding (UnreachableSchool sim.Household) ValidationStatus.Failed $"{sim.Name}'s school is not reachable from the generated network." (Some "Move school into catchment or add a collector/transit connection."))
+                Some(finding (UnreachableSchool sim.Household) ValidationStatus.Failed $"%s{sim.Name}'s school is not reachable from the generated network." (Some "Move school into catchment or add a collector/transit connection."))
             | _ -> None)
         |> Seq.toList
 
@@ -78,7 +78,7 @@ module WorldGeneration =
                     let message = sprintf "%s's commute is long at %.0f minutes." sim.Name route.TotalMinutes
                     Some(finding (ImplausibleCommutePattern sim.Household) ValidationStatus.IntentionalConstraint message (Some "Scenario allows long cross-town commutes; transport stress will model the consequence."))
                 | None ->
-                    Some(finding (ImplausibleCommutePattern sim.Household) ValidationStatus.Failed $"{sim.Name} has an unreachable job." (Some "Regenerate job placement or add regional connector."))
+                    Some(finding (ImplausibleCommutePattern sim.Household) ValidationStatus.Failed $"%s{sim.Name} has an unreachable job." (Some "Regenerate job placement or add regional connector."))
             | None -> None)
         |> Seq.toList
 
@@ -97,9 +97,9 @@ module WorldGeneration =
         |> Map.toSeq
         |> Seq.choose (fun (routeId, route) ->
             if route.Stops.Length < 2 then
-                Some(finding (TransitRouteWithoutDemand routeId) ValidationStatus.Failed $"{route.Name} has fewer than two stops." (Some "Remove route or connect plausible origins and destinations."))
+                Some(finding (TransitRouteWithoutDemand routeId) ValidationStatus.Failed $"%s{route.Name} has fewer than two stops." (Some "Remove route or connect plausible origins and destinations."))
             elif route.HeadwayMinutes > 45 then
-                Some(finding (TransitRouteWithoutDemand routeId) ValidationStatus.IntentionalConstraint $"{route.Name} has poor headways; this is retained as a transit reliability constraint." None)
+                Some(finding (TransitRouteWithoutDemand routeId) ValidationStatus.IntentionalConstraint $"%s{route.Name} has poor headways; this is retained as a transit reliability constraint." None)
             else
                 None)
         |> Seq.toList
@@ -110,7 +110,7 @@ module WorldGeneration =
         |> Seq.choose (fun (neighborhoodId, access) ->
             if access.EmergencyAccess < 0.45 then
                 let name = world.Neighborhoods |> Map.tryFind neighborhoodId |> Option.map _.Name |> Option.defaultValue "Unknown neighborhood"
-                Some(finding (EmergencyCoverageGap neighborhoodId) ValidationStatus.IntentionalConstraint $"{name} has weak emergency access." (Some "Scenario keeps this as a service planning problem."))
+                Some(finding (EmergencyCoverageGap neighborhoodId) ValidationStatus.IntentionalConstraint $"%s{name} has weak emergency access." (Some "Scenario keeps this as a service planning problem."))
             else
                 None)
         |> Seq.toList
@@ -120,7 +120,7 @@ module WorldGeneration =
         |> Map.toSeq
         |> Seq.choose (fun (institutionId, institution) ->
             if not (Map.containsKey institution.Neighborhood world.Neighborhoods) then
-                Some(finding (InstitutionWithoutCatchment institutionId) ValidationStatus.Failed $"{institution.Name} is not assigned to a valid neighborhood catchment." (Some "Assign institution to nearest district/neighborhood."))
+                Some(finding (InstitutionWithoutCatchment institutionId) ValidationStatus.Failed $"%s{institution.Name} is not assigned to a valid neighborhood catchment." (Some "Assign institution to nearest district/neighborhood."))
             else
                 None)
         |> Seq.toList
@@ -132,9 +132,9 @@ module WorldGeneration =
             block.Parcels
             |> Seq.choose (fun parcelId ->
                 if not (Map.containsKey parcelId world.City.Parcels) then
-                    Some(finding (IsolatedParcel parcelId) ValidationStatus.Failed $"{block.Name} references a parcel that was not generated." (Some "Regenerate block parcel membership from city parcel table."))
+                    Some(finding (IsolatedParcel parcelId) ValidationStatus.Failed $"%s{block.Name} references a parcel that was not generated." (Some "Regenerate block parcel membership from city parcel table."))
                 elif block.RoadFrontage.IsEmpty && block.Buildable then
-                    Some(finding (IsolatedParcel parcelId) ValidationStatus.Failed $"{block.Name} has a buildable parcel without road frontage." (Some "Attach local street frontage or mark block open space."))
+                    Some(finding (IsolatedParcel parcelId) ValidationStatus.Failed $"%s{block.Name} has a buildable parcel without road frontage." (Some "Attach local street frontage or mark block open space."))
                 else
                     None))
         |> Seq.toList
@@ -171,10 +171,10 @@ module WorldGeneration =
                   "Scenario uses an old industrial river-city pattern: downtown grid, aging apartments, industrial edge, regional mall, and constrained transit."
                   "Existing procedural and future imported worlds share the same World/CityMap/TransportState domain types." ]
             GeneratedSummary =
-                [ $"{world.Region.Name}: {world.Settlements.Count} settlements, {world.Districts.Count} districts, {world.Neighborhoods.Count} neighborhoods."
-                  $"{world.Blocks.Count} blocks, {world.City.Parcels.Count} parcels, {world.HousingUnits.Count} housing units."
-                  $"{world.Map.RoadSegments.Length} road segments, {world.Transport.Lanes.Count} lanes, {world.Transport.Intersections.Count} intersections."
-                  $"{world.Institutions.Count} institutions, {world.Households.Count} households, {world.Sims.Count} people." ]
+                [ $"%s{world.Region.Name}: %d{world.Settlements.Count} settlements, %d{world.Districts.Count} districts, %d{world.Neighborhoods.Count} neighborhoods."
+                  $"%d{world.Blocks.Count} blocks, %d{world.City.Parcels.Count} parcels, %d{world.HousingUnits.Count} housing units."
+                  $"%d{world.Map.RoadSegments.Length} road segments, %d{world.Transport.Lanes.Count} lanes, %d{world.Transport.Intersections.Count} intersections."
+                  $"%d{world.Institutions.Count} institutions, %d{world.Households.Count} households, %d{world.Sims.Count} people." ]
             Findings = findings
             Repairs = repairs
             IntentionalConstraints = constraints }

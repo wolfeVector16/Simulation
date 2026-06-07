@@ -154,7 +154,7 @@ module Engine =
             |> List.filter (fun segment ->
                 before.Map.RoadSegments
                 |> List.tryFind (fun previous -> previous.Id = segment.Id)
-                |> Option.exists ((<>) segment))
+                |> Option.exists (fun prev -> prev <> segment))
             |> List.map _.Id
             |> List.toArray
 

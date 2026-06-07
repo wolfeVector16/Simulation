@@ -341,7 +341,7 @@ module LifeSim =
             let cleaningDelta = -0.006 * hours * max 1.0 (float household.Objects.Length / 8.0)
             let repairDrag =
                 household.Objects
-                |> List.filter _.Broken
+                |> List.filter (fun obj -> obj.Broken)
                 |> List.length
                 |> float
                 |> (*) 0.01

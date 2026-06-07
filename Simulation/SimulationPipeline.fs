@@ -25,7 +25,8 @@ module SimulationPipeline =
         stableGuid [ "intent"; string seed; string tick; label; string index ]
 
     let private partitionForHousehold (HouseholdId id) =
-        $"household:{id:N}"
+        let idStr = id.ToString("N")
+        $"household:%s{idStr}"
 
     let private isMonthlyRentMoment world =
         world.Day % 30 = 5 && world.MinuteOfDay = 6 * 60
@@ -125,7 +126,9 @@ module SimulationPipeline =
         | Some householdId -> partitionForHousehold householdId |> PartitionId
         | None ->
             match trip.PersonId with
-            | Some (SimId id) -> PartitionId($"person:{id:N}")
+            | Some (SimId id) ->
+                let idStr = id.ToString("N")
+                PartitionId($"person:%s{idStr}")
             | None -> PartitionId "system"
 
     let rebuildRuntimeIndexes world =
@@ -188,14 +191,12 @@ module SimulationPipeline =
             |> Seq.countBy id
             |> Map.ofSeq
 
-        let mutable relationshipOffset = 0
-        let relationshipsByPersonIndex : RelationshipIndexRange array =
-            personIdsByIndex
-            |> Array.map (fun simId ->
+        let relationshipsByPersonIndex, _ =
+            (0, personIdsByIndex)
+            ||> Array.mapFold (fun offset simId ->
                 let count = relationshipCountsByPerson |> Map.tryFind simId |> Option.defaultValue 0
-                let range : RelationshipIndexRange = { Start = relationshipOffset; Length = count }
-                relationshipOffset <- relationshipOffset + count
-                range)
+                let range : RelationshipIndexRange = { Start = offset; Length = count }
+                range, offset + count)
 
         let lanesByIndex : LaneRuntimeState array =
             laneIdsByIndex
@@ -530,9 +531,9 @@ module SimulationPipeline =
                 |> Option.map fst
 
             Some(baseMemory Notable 0.25 [ "transport"; "transit-delay"; string routeId ] [] (institution |> Option.toList) None [ AffectsTrust institution ])
-        | BuildingDestroyed(eventId, _, _, _, reason, _) ->
+        | BuildingDestroyed(_, _, _, _, reason, _) ->
             Some(baseMemory Important 0.42 [ "built-environment"; "building-destroyed"; string reason ] [] [] None [ AffectsAttachment None ])
-        | HouseholdsDisplaced(eventId, _, _, households) ->
+        | HouseholdsDisplaced(_, _, _, households) ->
             let people =
                 households
                 |> List.collect (fun householdId ->
@@ -542,7 +543,7 @@ module SimulationPipeline =
                     |> Option.defaultValue [])
 
             Some(baseMemory Traumatic 0.70 [ "housing"; "displacement" ] people [] None [ AffectsFear; AffectsAttachment None ])
-        | RoadBuilt(eventId, _, segment, _, _) ->
+        | RoadBuilt(_, _, segment, _, _) ->
             Some(baseMemory Trivial 0.12 [ "transport"; "road-built"; string segment.Id ] [] [] None [ AffectsAttachment None ])
         | _ -> None
 
@@ -864,7 +865,7 @@ module SimulationPipeline =
                     Heat = toLevel
                     LegalStatus = if heatRank toLevel > 0 then UnderInvestigation else actor.LegalStatus })
             |> addStreetEventId eventId
-        | BuildingConstructed(_, _, buildingId, parcelId, building, cost) ->
+        | BuildingConstructed(_, _, _, parcelId, building, cost) ->
             { world with
                 City =
                     { world.City with
@@ -1042,7 +1043,7 @@ module SimulationPipeline =
                             Needs =
                                 sim.Needs
                                 |> Map.change Learning (Option.map (fun need -> { need with Value = clamp01 (need.Value - 0.08) })) })) }
-        | TransportEventOccurred(_, ArrivedLate(simId, purpose, delay)) ->
+        | TransportEventOccurred(_, ArrivedLate(simId, _, delay)) ->
             let stress = min 0.18 (float delay / 120.0)
 
             let sims =

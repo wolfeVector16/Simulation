@@ -411,7 +411,7 @@ module Transport =
         | ToDaycare, _, Some school -> Some school.StartMinute
         | _ -> None
 
-    let private privateCarRoute world seed tick tripKey origin destination deadline (sim: Sim) household =
+    let private privateCarRoute world seed tick tripKey origin destination deadline (sim: Sim) _household =
         roadRoute world PrivateCar origin destination
         |> Option.map (fun (roadMinutes, accessMeters, segments, nodePath, segmentMinutes, intersectionDelays) ->
             let parking = firstParkingNear world destination
@@ -530,7 +530,7 @@ module Transport =
 
             Some(route, float expected, extraReasons)
 
-    let private chooseModeAndRoute world seed tick tripKey (sim: Sim) household origin destination purpose deadline available =
+    let private chooseModeAndRoute world seed tick tripKey (sim: Sim) household origin destination _ deadline available =
         let candidates =
             available
             |> Seq.sort
@@ -626,7 +626,7 @@ module Transport =
                             let currentSpeed =
                                 firstSegmentId
                                 |> Option.bind (fun segmentId -> world.Map.RoadSegments |> List.tryFind (fun segment -> segment.Id = segmentId))
-                                |> Option.map (segmentEffectiveSpeedKph world)
+                                |> Option.map (fun segment -> segmentEffectiveSpeedKph world segment)
                                 |> Option.defaultValue 0.0
 
                             let vehicle =
@@ -666,7 +666,7 @@ module Transport =
             | InProgress, Some simId when not (Set.contains simId inTransitPeople) ->
                 let delay =
                     match trip.DeadlineMinute, trip.CurrentRoute with
-                    | Some deadline, Some route -> max 0 (normalizeMinute (world.MinuteOfDay) - deadline)
+                    | Some deadline, Some _ -> max 0 (normalizeMinute (world.MinuteOfDay) - deadline)
                     | _ -> 0
 
                 let events =
@@ -682,7 +682,7 @@ module Transport =
         if not route.RequiresParking then
             []
         else
-            match locationPlace trip.Destination |> Option.bind (firstParkingNear world) with
+            match locationPlace trip.Destination |> Option.bind (fun place -> firstParkingNear world place) with
             | None -> [ ParkingSearchStarted trip.Id; ParkingFailed trip.Id ]
             | Some zone ->
                 let pressure = float zone.Occupied / max 1.0 (float zone.Capacity)
@@ -716,13 +716,13 @@ module Transport =
     let private routeSegmentLength world segmentId =
         world.Map.RoadSegments
         |> List.tryFind (fun segment -> segment.Id = segmentId)
-        |> Option.map (segmentLength world)
+        |> Option.map (fun segment -> segmentLength world segment)
         |> Option.defaultValue Double.PositiveInfinity
 
     let private routeSegmentSpeed world segmentId =
         world.Map.RoadSegments
         |> List.tryFind (fun segment -> segment.Id = segmentId)
-        |> Option.map (segmentEffectiveSpeedKph world)
+        |> Option.map (fun segment -> segmentEffectiveSpeedKph world segment)
         |> Option.defaultValue 0.0
 
     let private routeIntersectionAfterSegment route index =
@@ -734,7 +734,7 @@ module Transport =
 
         let parking =
             if route.RequiresParking then
-                destination |> Option.bind (firstParkingNear world) |> Option.map _.Id
+                destination |> Option.bind (fun place -> firstParkingNear world place) |> Option.map _.Id
             else
                 None
 
@@ -852,7 +852,7 @@ module Transport =
 
         { transport with Vehicles = vehicles }
 
-    let private updateTripsAndEvents minutes world =
+    let private updateTripsAndEvents _ world =
         let completed = completeArrivedTrips world
 
         let tripsAfterCompletions =
@@ -1395,7 +1395,7 @@ module TrafficVisualization =
             |> List.filter (fun vehicle ->
                 previousVehicles
                 |> Map.tryFind vehicle.VehicleId
-                |> Option.exists ((<>) vehicle))
+                |> Option.exists (fun prev -> prev <> vehicle))
 
         let removed =
             previous.Vehicles
@@ -1405,12 +1405,12 @@ module TrafficVisualization =
         let previousRoads = previous.RoadSegments |> List.map (fun road -> road.SegmentId, road) |> Map.ofList
         let changedRoads =
             current.RoadSegments
-            |> List.filter (fun road -> previousRoads |> Map.tryFind road.SegmentId |> Option.exists ((<>) road))
+            |> List.filter (fun road -> previousRoads |> Map.tryFind road.SegmentId |> Option.exists (fun prev -> prev <> road))
 
         let previousIntersections = previous.Intersections |> List.map (fun intersection -> intersection.IntersectionId, intersection) |> Map.ofList
         let changedIntersections =
             current.Intersections
-            |> List.filter (fun intersection -> previousIntersections |> Map.tryFind intersection.IntersectionId |> Option.exists ((<>) intersection))
+            |> List.filter (fun intersection -> previousIntersections |> Map.tryFind intersection.IntersectionId |> Option.exists (fun prev -> prev <> intersection))
 
         let vehicleEvents =
             [ for vehicle in added do

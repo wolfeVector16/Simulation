@@ -393,7 +393,7 @@ module CommandSystem =
             let rec visit seen frontier =
                 match frontier with
                 | [] -> false
-                | place :: rest when place = destination -> true
+                | place :: _ when place = destination -> true
                 | place :: rest ->
                     let next =
                         world.Street.PlaceConnections
@@ -452,7 +452,7 @@ module CommandSystem =
                   | Some vehicle, _ when vehicle.Disabled || vehicle.Access = VehicleDisabled ->
                       InvariantViolation "Cannot enter a disabled vehicle."
                   | _ -> ()
-              | ExitVehicle command ->
+              | ExitVehicle _ ->
                   match actor with
                   | Some actor ->
                       match actor.Location, actor.CurrentVehicle with
@@ -575,7 +575,7 @@ module CommandSystem =
                 FeasibleIllegal { Rule = "Taking goods without payment is an abstract illegal action."; Severity = 0.45 },
                 [ UnauthorizedAction; IllegalAction; WitnessRisk; PoliceResponseRisk; HeatIncreaseRisk; BusinessInterruptionRisk ],
                 []
-            | Trespass command ->
+            | Trespass _ ->
                 FeasibleIllegal { Rule = "Trespass is an abstract illegal action."; Severity = 0.25 },
                 [ UnauthorizedAction; IllegalAction; WitnessRisk; PoliceResponseRisk ],
                 []
@@ -629,7 +629,7 @@ module CommandSystem =
                   | None -> EntityNotFound(ParcelRef command.TargetParcel)
                   | Some parcel ->
                       if parcel.Building.IsSome then
-                          InvariantViolation $"Parcel {command.TargetParcel} already has a building."
+                          InvariantViolation $"Parcel %O{command.TargetParcel} already has a building."
 
                       if not (buildingUseAllowed command.BuildingUse parcel.Zone) then
                           InvalidZoning(command.TargetParcel, command.RequiredZoning)
@@ -1323,7 +1323,7 @@ module CommandSystem =
                     world.Map.Places
                     |> Map.tryFind destination
                     |> Option.map (fun destinationPlace ->
-                        let command = StreetCommand(MoveActor { Context = context $"Move to {destinationPlace.Name}"; Destination = destination })
+                        let command = StreetCommand(MoveActor { Context = context $"Move to %s{destinationPlace.Name}"; Destination = destination })
                         let prompt : InteractionPromptDto =
                             { Id = interactionIdFor world actor.Id destinationPlace.Name
                               Label = destinationPlace.Name
