@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Simulation/Simulation.fsproj" />
+  <Project Path="src/RealSim.Avalonia/RealSim.Avalonia.csproj" />
+  <Project Path="src/RealSim.Host/RealSim.Host.fsproj" />
+  <Project Path="src/RealSim.Scenarios/RealSim.Scenarios.fsproj" />
+  <Project Path="tests/RealSim.Tests/RealSim.Tests.fsproj" />
+</Solution>

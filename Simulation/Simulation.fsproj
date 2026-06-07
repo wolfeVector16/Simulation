@@ -1,0 +1,55 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Domain.fs" />
+    <Compile Include="Ids.fs" />
+    <Compile Include="TimeTypes.fs" />
+    <Compile Include="MeasureTypes.fs" />
+    <Compile Include="Measures.fs" />
+    <Compile Include="CommonTypes.fs" />
+    <Compile Include="NeedTypes.fs" />
+    <Compile Include="SkillTypes.fs" />
+    <Compile Include="SimTypes.fs" />
+    <Compile Include="GeographyTypes.fs" />
+    <Compile Include="PlaceTypes.fs" />
+    <Compile Include="RoadTypes.fs" />
+    <Compile Include="MapTypes.fs" />
+    <Compile Include="WorldGenerationTypes.fs" />
+    <Compile Include="ZoningTypes.fs" />
+    <Compile Include="BuildingTypes.fs" />
+    <Compile Include="CityTypes.fs" />
+    <Compile Include="DiagnosticsTypes.fs" />
+    <Compile Include="RelationshipTypes.fs" />
+    <Compile Include="SocialGroupTypes.fs" />
+    <Compile Include="InstitutionTypes.fs" />
+    <Compile Include="HousingTypes.fs" />
+    <Compile Include="StreetTypes.fs" />
+    <Compile Include="PolicyTypes.fs" />
+    <Compile Include="CommandTypes.fs" />
+    <Compile Include="DecisionTypes.fs" />
+    <Compile Include="TransportTypes.fs" />
+    <Compile Include="MemoryTypes.fs" />
+    <Compile Include="EventTypes.fs" />
+    <Compile Include="PipelineTypes.fs" />
+    <Compile Include="HouseholdTypes.fs" />
+    <Compile Include="WorldIndexTypes.fs" />
+    <Compile Include="WorldState.fs" />
+    <Compile Include="MapGraph.fs" />
+    <Compile Include="Economy.fs" />
+    <Compile Include="CitySystems.fs" />
+    <Compile Include="LifeSim.fs" />
+    <Compile Include="Diagnostics.fs" />
+    <Compile Include="Transport.fs" />
+    <Compile Include="WorldIndexes.fs" />
+    <Compile Include="WorldGeneration.fs" />
+    <Compile Include="SimulationPipeline.fs" />
+    <Compile Include="SimBehavior.fs" />
+    <Compile Include="CommandSystem.fs" />
+    <Compile Include="Engine.fs" />
+  </ItemGroup>
+
+</Project>

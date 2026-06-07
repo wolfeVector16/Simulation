@@ -1,0 +1,116 @@
+<Window
+    x:Class="RealSim.Avalonia.MainWindow"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:RealSim.Avalonia.Controls"
+    xmlns:vm="clr-namespace:RealSim.Avalonia.ViewModels"
+    xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+    x:DataType="vm:MainWindowViewModel"
+    Title="RealSim Map Viewer"
+    Width="1280"
+    Height="820"
+    MinWidth="960"
+    MinHeight="620">
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Padding="8" Background="#20242B">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Content="Load Juniper" Command="{Binding LoadJuniperScenarioCommand}" />
+        <Button Content="{Binding PlayPauseText}" Command="{Binding TogglePlayPauseCommand}" />
+        <Button Content="Advance 1 Tick" Command="{Binding AdvanceTickCommand}" />
+        <Button Content="Advance 1 Day" Command="{Binding AdvanceDayCommand}" />
+        <Button Content="Reset" Command="{Binding ResetScenarioCommand}" />
+        <Separator />
+        <Button Content="Zoom In" Command="{Binding ZoomInCommand}" />
+        <Button Content="Zoom Out" Command="{Binding ZoomOutCommand}" />
+        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Foreground="#F2F4F8" Margin="12,0,0,0" />
+      </StackPanel>
+    </Border>
+
+    <Grid DockPanel.Dock="Bottom" Height="150" RowDefinitions="Auto,*">
+      <TextBlock Text="Recent Events" FontWeight="SemiBold" Margin="8,6,8,2" />
+      <ListBox Grid.Row="1" ItemsSource="{Binding RecentEvents}" Margin="8,0,8,8">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:EventLogItemViewModel">
+            <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="12" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Grid>
+
+    <Grid ColumnDefinitions="*,320">
+      <Border Grid.Column="0" Background="#F4F7F8">
+        <controls:CityMapView ViewModel="{Binding Map}" />
+      </Border>
+
+      <ScrollViewer Grid.Column="1" Background="#F7F8FA">
+        <StackPanel Margin="12" Spacing="12">
+          <TextBlock Text="Layers" FontWeight="SemiBold" FontSize="16" />
+          <WrapPanel>
+            <CheckBox Content="Roads" IsChecked="{Binding Map.ShowRoads}" Margin="0,0,10,4" />
+            <CheckBox Content="Buildings" IsChecked="{Binding Map.ShowBuildings}" Margin="0,0,10,4" />
+            <CheckBox Content="Transit" IsChecked="{Binding Map.ShowTransit}" Margin="0,0,10,4" />
+            <CheckBox Content="Sims" IsChecked="{Binding Map.ShowSims}" Margin="0,0,10,4" />
+            <CheckBox Content="Vehicles" IsChecked="{Binding Map.ShowVehicles}" Margin="0,0,10,4" />
+            <CheckBox Content="Events" IsChecked="{Binding Map.ShowEvents}" Margin="0,0,10,4" />
+            <CheckBox Content="Labels" IsChecked="{Binding Map.ShowLabels}" Margin="0,0,10,4" />
+          </WrapPanel>
+
+          <Separator />
+          <TextBlock Text="Legend" FontWeight="SemiBold" FontSize="16" />
+          <ItemsControl ItemsSource="{Binding Map.LegendItems}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:LegendItemViewModel">
+                <Grid ColumnDefinitions="28,*" Margin="0,0,0,6">
+                  <Border Width="18" Height="12" VerticalAlignment="Center" Background="{Binding Fill}" BorderBrush="{Binding Stroke}" BorderThickness="2" />
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Label}" FontWeight="SemiBold" FontSize="12" />
+                    <TextBlock Text="{Binding Description}" TextWrapping="Wrap" FontSize="11" Foreground="#4F5B62" />
+                  </StackPanel>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <Separator />
+          <TextBlock Text="Selected" FontWeight="SemiBold" FontSize="16" />
+          <TextBlock Text="{Binding SelectedEntity.Title}" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding SelectedEntity.Subtitle}" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding SelectedEntity.Details}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="sys:String">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <Separator />
+          <TextBlock Text="City" FontWeight="SemiBold" FontSize="16" />
+          <TextBlock Text="{Binding CitySummary.Name}" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding CitySummary.PopulationText}" />
+          <TextBlock Text="{Binding CitySummary.BudgetText}" />
+          <TextBlock Text="{Binding CitySummary.DemandText}" />
+          <TextBlock Text="{Binding CitySummary.DiagnosticsText}" TextWrapping="Wrap" />
+
+          <Separator />
+          <TextBlock Text="Neighborhoods" FontWeight="SemiBold" FontSize="16" />
+          <ItemsControl ItemsSource="{Binding Neighborhoods}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:NeighborhoodSummaryViewModel">
+                <StackPanel Margin="0,0,0,8">
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" FontSize="12" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <Separator />
+          <TextBlock Text="Transport" FontWeight="SemiBold" FontSize="16" />
+          <TextBlock Text="{Binding TransportSummary.RoadText}" />
+          <TextBlock Text="{Binding TransportSummary.ReliabilityText}" />
+          <TextBlock Text="{Binding TransportSummary.EventsText}" TextWrapping="Wrap" />
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</Window>
