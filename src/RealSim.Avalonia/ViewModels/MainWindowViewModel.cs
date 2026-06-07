@@ -14,7 +14,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SimulationSession _session;
     private readonly DispatcherTimer _playTimer;
     private readonly int _seed = 1337;
-    private readonly int _tickMinutes = 15;
+    private const int DefaultPlaybackStepMinutes = 1;
 
     [ObservableProperty]
     private MapViewModel map = new();
@@ -34,6 +34,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private bool isPlaying;
 
+    [ObservableProperty]
+    private int playbackStepMinutes = DefaultPlaybackStepMinutes;
+
     public string PlayPauseText => IsPlaying ? "Pause" : "Play";
 
     public ObservableCollection<EventLogItemViewModel> RecentEvents { get; } = new();
@@ -45,8 +48,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _session = session;
         Map.SelectionChanged += primitive => SelectedEntity.Show(primitive);
         Map.MovingSelectionChanged += entity => SelectedEntity.Show(entity);
-        _playTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
-        _playTimer.Tick += (_, _) => AdvanceTick();
+        _playTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _playTimer.Tick += (_, _) => AdvanceMinutes(PlaybackStepMinutes);
         LoadJuniperScenario();
     }
 
@@ -71,7 +74,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _session.LoadJuniper(_seed);
             Map.ResetView();
             RefreshFromWorld();
-            StatusText = $"Juniper loaded: day {_session.CurrentWorld.Day}, {Simulation.Measures.formatTime(_session.CurrentWorld.MinuteOfDay)}";
+            StatusText = CreateStatusText("Juniper loaded");
         }
         catch (Exception ex)
         {
@@ -82,16 +85,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void AdvanceTick()
     {
-        try
-        {
-            _ = _session.AdvanceTick(_tickMinutes);
-            RefreshFromWorld();
-            StatusText = $"Advanced {_tickMinutes} minutes: day {_session.CurrentWorld.Day}, {Simulation.Measures.formatTime(_session.CurrentWorld.MinuteOfDay)}";
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"Advance failed: {ex.Message}";
-        }
+        AdvanceMinutes(1);
+    }
+
+    [RelayCommand]
+    private void AdvanceFifteenMinutes()
+    {
+        AdvanceMinutes(15);
+    }
+
+    [RelayCommand]
+    private void AdvanceOneHour()
+    {
+        AdvanceMinutes(60);
     }
 
     [RelayCommand]
@@ -99,9 +105,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         try
         {
-            _ = _session.AdvanceDay(_tickMinutes);
+            _ = _session.AdvanceManyMinutes(SimulationSession.MinutesPerDay, 60);
             RefreshFromWorld();
-            StatusText = $"Advanced one day: day {_session.CurrentWorld.Day}, {Simulation.Measures.formatTime(_session.CurrentWorld.MinuteOfDay)}";
+            StatusText = CreateStatusText("Advanced 1 day");
         }
         catch (Exception ex)
         {
@@ -113,7 +119,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void TogglePlayPause()
     {
         IsPlaying = !IsPlaying;
-        StatusText = IsPlaying ? "Playing simulation ticks." : "Paused.";
+        StatusText = IsPlaying ? CreateStatusText("Playing") : CreateStatusText("Paused");
     }
 
     [RelayCommand]
@@ -122,7 +128,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _session.Reset();
         Map.ResetView();
         RefreshFromWorld();
-        StatusText = "Scenario reset.";
+        StatusText = CreateStatusText("Scenario reset");
     }
 
     [RelayCommand]
@@ -162,6 +168,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     private bool CanUseCityCommandHook() => false;
+
+    private void AdvanceMinutes(int minutes)
+    {
+        try
+        {
+            _ = _session.AdvanceMinutes(minutes);
+            RefreshFromWorld();
+            StatusText = CreateStatusText($"Advanced {minutes} min");
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Advance failed: {ex.Message}";
+        }
+    }
 
     private void RefreshFromWorld()
     {
@@ -221,5 +241,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             $"roads={world.Map.RoadSegments.Length}, lanes={world.Transport.Lanes.Count}, trips={world.Transport.Trips.Count}",
             $"reliability={metrics.AverageTravelReliability:0.00}, congestion={metrics.AverageCongestion:0.00}, transitTrust={metrics.TransitTrust:0.00}",
             $"late={metrics.LateArrivalsToday}, failedMerges={metrics.FailedLaneChangesToday}, parkingFailures={metrics.ParkingFailuresToday}");
+    }
+
+    private string CreateStatusText(string prefix)
+    {
+        var world = _session.CurrentWorld;
+        var vehicleCount = Map.MovingEntities.Count(entity => entity.Kind is not RealSim.Avalonia.Models.MovingEntityKind.Pedestrian and not RealSim.Avalonia.Models.MovingEntityKind.Sim);
+        var pedestrianCount = Map.MovingEntities.Count - vehicleCount;
+        return $"{prefix}: Day {world.Day} {Simulation.Measures.formatTime(world.MinuteOfDay)} | Tick {world.Meta.Tick} | Step: {PlaybackStepMinutes} min | Vehicles: {vehicleCount} | Pedestrians: {pedestrianCount}";
     }
 }

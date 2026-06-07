@@ -605,7 +605,7 @@ module TransportAndDecisionTests =
         let destination =
             world.Map.Places
             |> Map.toSeq
-            |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 80.0)
+            |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 800.0)
             |> fst
 
         let origin =
@@ -628,7 +628,7 @@ module TransportAndDecisionTests =
         let destination =
             world.Map.Places
             |> Map.toSeq
-            |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 80.0)
+            |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 800.0)
             |> fst
 
         let origin =
@@ -723,8 +723,8 @@ module TransportAndDecisionTests =
             |> List.find (fun segment -> segment.Name = "Regional Connector")
             |> _.To
 
-        let baseWorld, fastMiddle = baseWorld |> addNode 400 60.0 5.0
-        let baseWorld, slowerMiddle = baseWorld |> addNode 401 60.0 20.0
+        let baseWorld, fastMiddle = baseWorld |> addNode 400 800.0 500.0
+        let baseWorld, slowerMiddle = baseWorld |> addNode 401 800.0 420.0
         let baseWorld, fastA = baseWorld |> addSegment 410 "Fast signal approach" 75.0 90 Highway officeNode fastMiddle
         let baseWorld, fastB = baseWorld |> addSegment 420 "Fast signal exit" 75.0 90 Highway fastMiddle mallNode
         let baseWorld, slowA = baseWorld |> addSegment 430 "Calm bypass approach" 70.0 90 Collector officeNode slowerMiddle
@@ -741,7 +741,7 @@ module TransportAndDecisionTests =
         let destination =
             baseWorld.Map.Places
             |> Map.toSeq
-            |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 80.0)
+            |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 800.0)
             |> fst
 
         let withoutDelay =
@@ -779,7 +779,7 @@ module TransportAndDecisionTests =
             let destination =
                 world.Map.Places
                 |> Map.toSeq
-                |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 80.0)
+                |> Seq.find (fun (_, place) -> place.Kind = Commercial && place.Position.X > 800.0)
                 |> fst
 
             world |> privateCarTripWorld origin destination |> Transport.tick 1 |> firstCurrentRoute |> sprintf "%A"

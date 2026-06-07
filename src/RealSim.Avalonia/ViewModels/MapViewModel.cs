@@ -29,13 +29,19 @@ public sealed partial class MapViewModel : ObservableObject
     private MovingEntityViewModel? selectedMovingEntity;
 
     [ObservableProperty]
+    private MapDisplayMode displayMode = MapDisplayMode.Clarity;
+
+    [ObservableProperty]
+    private DateTime animationTimeUtc = DateTime.UtcNow;
+
+    [ObservableProperty]
     private bool showRoads = true;
 
     [ObservableProperty]
     private bool showBuildings = true;
 
     [ObservableProperty]
-    private bool showTransit = true;
+    private bool showTransit;
 
     [ObservableProperty]
     private bool showSims = true;
@@ -47,16 +53,19 @@ public sealed partial class MapViewModel : ObservableObject
     private bool showVehicles = true;
 
     [ObservableProperty]
-    private bool showRoutes = true;
+    private bool showRoutes;
 
     [ObservableProperty]
     private bool showTraffic = true;
 
     [ObservableProperty]
-    private bool showEvents = true;
+    private bool showEvents;
 
     [ObservableProperty]
     private bool showLabels = true;
+
+    [ObservableProperty]
+    private bool showDebugLayers;
 
     [ObservableProperty]
     private bool isFollowingSelectedMovement;
@@ -113,23 +122,79 @@ public sealed partial class MapViewModel : ObservableObject
 
     public IEnumerable<MapPrimitive> VisiblePrimitives => Primitives.Where(IsVisible);
 
-    private bool IsVisible(MapPrimitive primitive)
+    public bool IsVisible(MapPrimitive primitive)
     {
+        if (primitive == SelectedPrimitive)
+        {
+            return true;
+        }
+
+        if (DisplayMode == MapDisplayMode.DebugRawPrimitives)
+        {
+            return ShowDebugLayers || primitive.Kind != MapPrimitiveKind.Label;
+        }
+
+        if (primitive.VisualRole == VisualRole.Debug && primitive.Kind != MapPrimitiveKind.Place && !ShowDebugLayers)
+        {
+            return false;
+        }
+
+        if (DisplayMode == MapDisplayMode.Traffic)
+        {
+            return primitive.Kind switch
+            {
+                MapPrimitiveKind.Geography or MapPrimitiveKind.Neighborhood => true,
+                MapPrimitiveKind.Road or MapPrimitiveKind.RoadStatus => ShowRoads,
+                MapPrimitiveKind.TransitRoute => ShowTransit,
+                MapPrimitiveKind.Building or MapPrimitiveKind.Parcel => ShowBuildings,
+                MapPrimitiveKind.Institution => ShowBuildings,
+                MapPrimitiveKind.EventMarker => ShowEvents,
+                MapPrimitiveKind.ActiveRoute or MapPrimitiveKind.Destination => false,
+                _ => ShowDebugLayers
+            };
+        }
+
+        if (DisplayMode == MapDisplayMode.Zoning)
+        {
+            return primitive.Kind switch
+            {
+                MapPrimitiveKind.Geography or MapPrimitiveKind.Neighborhood => true,
+                MapPrimitiveKind.Parcel or MapPrimitiveKind.Building or MapPrimitiveKind.Institution => ShowBuildings,
+                MapPrimitiveKind.Road => ShowRoads,
+                MapPrimitiveKind.TransitRoute => false,
+                MapPrimitiveKind.EventMarker => ShowEvents && ShowDebugLayers,
+                _ => ShowDebugLayers
+            };
+        }
+
         return primitive.Kind switch
         {
             MapPrimitiveKind.Road => ShowRoads,
-            MapPrimitiveKind.RoadStatus => ShowRoads && ShowTraffic,
-            MapPrimitiveKind.Building or MapPrimitiveKind.Parcel or MapPrimitiveKind.Place or MapPrimitiveKind.Household or MapPrimitiveKind.Institution => ShowBuildings,
-            MapPrimitiveKind.TransitRoute => ShowTransit,
-            MapPrimitiveKind.ActiveRoute or MapPrimitiveKind.Destination => ShowRoutes,
+            MapPrimitiveKind.RoadStatus => false,
+            MapPrimitiveKind.Building or MapPrimitiveKind.Institution => ShowBuildings,
+            MapPrimitiveKind.Parcel => false,
+            MapPrimitiveKind.Place => primitive.Radius > 0.0 ||
+                                      primitive.Points.Count == 1 ||
+                                      primitive.VisualRole == VisualRole.Park ||
+                                      (ShowBuildings && primitive.Category is "School" or "Daycare" or "Civic"),
+            MapPrimitiveKind.Household => ShowDebugLayers,
+            MapPrimitiveKind.TransitRoute => false,
+            MapPrimitiveKind.ActiveRoute or MapPrimitiveKind.Destination => false,
             MapPrimitiveKind.MovingEntity => false,
-            MapPrimitiveKind.EventMarker => ShowEvents,
+            MapPrimitiveKind.EventMarker => ShowEvents && IsImportantEvent(primitive),
+            MapPrimitiveKind.Neighborhood => true,
+            MapPrimitiveKind.Geography => false,
             _ => true
         };
     }
 
     public bool IsMovingEntityVisible(MovingEntityViewModel entity)
     {
+        if (entity == SelectedMovingEntity)
+        {
+            return true;
+        }
+
         return entity.Kind switch
         {
             MovingEntityKind.Pedestrian or MovingEntityKind.Bike or MovingEntityKind.Sim => ShowPedestrians,
@@ -137,7 +202,12 @@ public sealed partial class MapViewModel : ObservableObject
         };
     }
 
-    public bool AreRoutesVisible => ShowRoutes;
+    public bool AreRoutesVisible => ShowRoutes || SelectedMovingEntity is not null;
+
+    public void AdvanceAnimationClock(DateTime utcNow)
+    {
+        AnimationTimeUtc = utcNow;
+    }
 
     public void ZoomBy(double factor)
     {
@@ -156,6 +226,41 @@ public sealed partial class MapViewModel : ObservableObject
         PanX = 0.0;
         PanY = 0.0;
         IsFollowingSelectedMovement = false;
+    }
+
+    [RelayCommand]
+    public void UseClarityMode()
+    {
+        DisplayMode = MapDisplayMode.Clarity;
+        ShowDebugLayers = false;
+        ShowRoutes = false;
+        ShowEvents = false;
+    }
+
+    [RelayCommand]
+    public void UseTrafficMode()
+    {
+        DisplayMode = MapDisplayMode.Traffic;
+        ShowTraffic = true;
+        ShowVehicles = true;
+        ShowTransit = true;
+    }
+
+    [RelayCommand]
+    public void UseZoningMode()
+    {
+        DisplayMode = MapDisplayMode.Zoning;
+        ShowBuildings = true;
+        ShowTraffic = false;
+    }
+
+    [RelayCommand]
+    public void UseDebugRawPrimitivesMode()
+    {
+        DisplayMode = MapDisplayMode.DebugRawPrimitives;
+        ShowDebugLayers = true;
+        ShowRoutes = true;
+        ShowEvents = true;
     }
 
     public MapPrimitive? SelectAt(double x, double y, double tolerance)
@@ -273,6 +378,15 @@ public sealed partial class MapViewModel : ObservableObject
             MapPrimitiveKind.Neighborhood => 7,
             _ => 8
         };
+    }
+
+    private static bool IsImportantEvent(MapPrimitive primitive)
+    {
+        return primitive.Category.Contains("Road", StringComparison.OrdinalIgnoreCase) ||
+               primitive.Name.Contains("blocked", StringComparison.OrdinalIgnoreCase) ||
+               primitive.Name.Contains("crash", StringComparison.OrdinalIgnoreCase) ||
+               primitive.Details.Contains("blocked", StringComparison.OrdinalIgnoreCase) ||
+               primitive.Details.Contains("capacity", StringComparison.OrdinalIgnoreCase);
     }
 
     private static double DistanceToPrimitive(MapPrimitive primitive, double x, double y)

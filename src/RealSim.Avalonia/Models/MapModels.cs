@@ -67,6 +67,46 @@ public enum MovingEntityKind
     Pedestrian
 }
 
+public enum VisualRole
+{
+    Terrain,
+    NeighborhoodBoundary,
+    Park,
+    Road,
+    TransitRoute,
+    BuildingFootprint,
+    InstitutionMarker,
+    Vehicle,
+    Pedestrian,
+    Event,
+    Selection,
+    Debug
+}
+
+public enum MapDisplayMode
+{
+    Clarity,
+    Traffic,
+    Zoning,
+    DebugRawPrimitives
+}
+
+public enum MapGeometryType
+{
+    Point,
+    Line,
+    Polygon,
+    Footprint
+}
+
+public enum MapClutterBehavior
+{
+    Keep,
+    Cluster,
+    HideWhenCrowded,
+    DebugOnly
+}
+
 public readonly record struct MapPoint(double X, double Y);
 
 public sealed record MapPrimitive(
@@ -84,7 +124,13 @@ public sealed record MapPrimitive(
     MapLineStyle LineStyle = MapLineStyle.Solid,
     double LabelMinZoom = 1.0,
     int LabelPriority = 100,
-    bool IsApproximate = false);
+    bool IsApproximate = false,
+    VisualRole VisualRole = VisualRole.Debug,
+    int Layer = 99,
+    MapGeometryType GeometryType = MapGeometryType.Polygon,
+    bool IsSelectable = true,
+    MapClutterBehavior ClutterBehavior = MapClutterBehavior.Keep,
+    string SymbolRole = "");
 
 public sealed record LegendItem(
     string Label,

@@ -17,6 +17,8 @@
         <Button Content="Load Juniper" Command="{Binding LoadJuniperScenarioCommand}" />
         <Button Content="{Binding PlayPauseText}" Command="{Binding TogglePlayPauseCommand}" />
         <Button Content="Advance 1 Tick" Command="{Binding AdvanceTickCommand}" />
+        <Button Content="Advance 15 Minutes" Command="{Binding AdvanceFifteenMinutesCommand}" />
+        <Button Content="Advance 1 Hour" Command="{Binding AdvanceOneHourCommand}" />
         <Button Content="Advance 1 Day" Command="{Binding AdvanceDayCommand}" />
         <Button Content="Reset" Command="{Binding ResetScenarioCommand}" />
         <Separator />
@@ -50,6 +52,13 @@
             </Style>
           </StackPanel.Styles>
           <TextBlock Text="Layers" FontWeight="SemiBold" FontSize="16" />
+          <TextBlock Text="{Binding Map.DisplayMode}" FontWeight="SemiBold" FontSize="12" />
+          <WrapPanel>
+            <Button Content="Clarity" Command="{Binding Map.UseClarityModeCommand}" Margin="0,0,6,4" />
+            <Button Content="Traffic" Command="{Binding Map.UseTrafficModeCommand}" Margin="0,0,6,4" />
+            <Button Content="Zoning" Command="{Binding Map.UseZoningModeCommand}" Margin="0,0,6,4" />
+            <Button Content="Debug" Command="{Binding Map.UseDebugRawPrimitivesModeCommand}" Margin="0,0,6,4" />
+          </WrapPanel>
           <WrapPanel>
             <CheckBox Content="Roads" IsChecked="{Binding Map.ShowRoads}" Margin="0,0,10,4" />
             <CheckBox Content="Buildings" IsChecked="{Binding Map.ShowBuildings}" Margin="0,0,10,4" />
@@ -60,6 +69,7 @@
             <CheckBox Content="Traffic" IsChecked="{Binding Map.ShowTraffic}" Margin="0,0,10,4" />
             <CheckBox Content="Events" IsChecked="{Binding Map.ShowEvents}" Margin="0,0,10,4" />
             <CheckBox Content="Labels" IsChecked="{Binding Map.ShowLabels}" Margin="0,0,10,4" />
+            <CheckBox Content="Debug layers" IsChecked="{Binding Map.ShowDebugLayers}" Margin="0,0,10,4" />
           </WrapPanel>
 
           <Separator />

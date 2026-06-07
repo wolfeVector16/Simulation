@@ -89,13 +89,13 @@ module Juniper =
         let schoolNode = roadNodeId ()
 
         let roadNodes =
-            [ { Id = westNode; Position = { X = 0.0; Y = 1.0 } }
-              { Id = midNode; Position = { X = 6.0; Y = 1.0 } }
-              { Id = eastNode; Position = { X = 12.0; Y = 1.0 } }
-              { Id = officeNode; Position = { X = 18.0; Y = 6.0 } }
-              { Id = industryNode; Position = { X = 12.0; Y = -4.0 } }
-              { Id = mallNode; Position = { X = 104.0; Y = 5.0 } }
-              { Id = schoolNode; Position = { X = 4.0; Y = 5.0 } } ]
+            [ { Id = westNode; Position = { X = 160.0; Y = 360.0 } }
+              { Id = midNode; Position = { X = 360.0; Y = 360.0 } }
+              { Id = eastNode; Position = { X = 560.0; Y = 360.0 } }
+              { Id = officeNode; Position = { X = 560.0; Y = 500.0 } }
+              { Id = industryNode; Position = { X = 740.0; Y = 220.0 } }
+              { Id = mallNode; Position = { X = 1040.0; Y = 360.0 } }
+              { Id = schoolNode; Position = { X = 300.0; Y = 620.0 } } ]
 
         let roadNodeMap = roadNodes |> List.map (fun node -> node.Id, node) |> Map.ofList
 
@@ -112,7 +112,7 @@ module Juniper =
                     None
 
             let length =
-                MapGraph.distanceMeters { Places = Map.empty; RoadNodes = roadNodeMap; RoadSegments = []; MetersPerMapUnit = 500.0 } a.Position b.Position
+                MapGraph.distanceMeters { Places = Map.empty; RoadNodes = roadNodeMap; RoadSegments = []; MetersPerMapUnit = 8.0 } a.Position b.Position
 
             let allowedGeneral =
                 [ PrivateCar; TaxiOrRideshare; Bus; ServiceVehicle; DeliveryVehicle; EmergencyVehicle; SchoolBus ] |> Set.ofList
@@ -178,25 +178,25 @@ module Juniper =
             [ { Id = homeA
                 Name = "Rowhouse 12"
                 Kind = Residence
-                Position = { X = 0.0; Y = 0.0 }
+                Position = { X = 180.0; Y = 430.0 }
                 RoadAccess = NearestRoadAccess 800.0
                 Economy = None }
               { Id = homeB
                 Name = "Canal Apartments"
                 Kind = Residence
-                Position = { X = 6.0; Y = 2.0 }
+                Position = { X = 300.0; Y = 430.0 }
                 RoadAccess = NearestRoadAccess 800.0
                 Economy = None }
               { Id = office
                 Name = "Civic Analytics"
                 Kind = Workplace
-                Position = { X = 18.0; Y = 7.0 }
+                Position = { X = 620.0; Y = 500.0 }
                 RoadAccess = NearestRoadAccess 800.0
                 Economy = None }
               { Id = workshop
                 Name = "Foundry Cooperative"
                 Kind = Industrial
-                Position = { X = 12.0; Y = -6.0 }
+                Position = { X = 780.0; Y = 220.0 }
                 RoadAccess = NearestRoadAccess 1200.0
                 Economy =
                     Some
@@ -210,13 +210,13 @@ module Juniper =
               { Id = park
                 Name = "Juniper Park"
                 Kind = Park
-                Position = { X = 8.0; Y = 4.0 }
+                Position = { X = 430.0; Y = 650.0 }
                 RoadAccess = NoRoadAccess
                 Economy = None }
               { Id = grocer
                 Name = "Corner Market"
                 Kind = Commercial
-                Position = { X = 5.8; Y = 1.8 }
+                Position = { X = 370.0; Y = 330.0 }
                 RoadAccess = NearestRoadAccess 500.0
                 Economy =
                     Some
@@ -232,8 +232,8 @@ module Juniper =
               { Id = generalStore
                 Name = "Main Street Goods"
                 Kind = Commercial
-                Position = { X = 11.0; Y = 1.5 }
-                RoadAccess = NearestRoadAccess 700.0
+                Position = { X = 470.0; Y = 330.0 }
+                RoadAccess = NearestRoadAccess 900.0
                 Economy =
                     Some
                         { emptyEconomy with
@@ -258,7 +258,7 @@ module Juniper =
               { Id = mall
                 Name = "Regional Galleria"
                 Kind = Commercial
-                Position = { X = 104.0; Y = 6.0 }
+                Position = { X = 1040.0; Y = 390.0 }
                 RoadAccess = NearestRoadAccess 1000.0
                 Economy =
                     Some
@@ -294,7 +294,7 @@ module Juniper =
               { Id = importer
                 Name = "North Freight Terminal"
                 Kind = OutsideConnection
-                Position = { X = -1.5; Y = 1.0 }
+                Position = { X = 80.0; Y = 360.0 }
                 RoadAccess = NearestRoadAccess 900.0
                 Economy =
                     Some
@@ -323,19 +323,19 @@ module Juniper =
               { Id = elementary
                 Name = "Juniper Elementary"
                 Kind = School
-                Position = { X = 4.2; Y = 5.3 }
+                Position = { X = 300.0; Y = 640.0 }
                 RoadAccess = NearestRoadAccess 500.0
                 Economy = None }
               { Id = daycare
                 Name = "Little Steps Daycare"
                 Kind = Daycare
-                Position = { X = 5.0; Y = 4.4 }
+                Position = { X = 240.0; Y = 580.0 }
                 RoadAccess = NearestRoadAccess 500.0
                 Economy = None }
               { Id = policeStation
                 Name = "Small Police Station"
                 Kind = Civic
-                Position = { X = 6.5; Y = 1.0 }
+                Position = { X = 520.0; Y = 410.0 }
                 RoadAccess = NearestRoadAccess 500.0
                 Economy = None } ]
 
@@ -578,16 +578,16 @@ module Juniper =
                   Status = Occupied }
 
         let parcels =
-            [ parcel "Old Rowhouse Block" ResidentialZone LowDensity 0.0 0.0 (building "Rowhouses" Housing MiddleWealth 10 3 0) 0.48 0.62 0.04
-              parcel "Canal Apartments Block" ResidentialZone MediumDensity 6.0 2.0 (building "Canal Apartments" Housing MiddleWealth 32 18 0) 0.54 0.66 0.05
-              parcel "North Starter Lots" ResidentialZone LowDensity 3.0 7.0 None 0.42 0.58 0.03
-              parcel "Main Street Retail" CommercialZone LowDensity 6.0 1.5 (building "Local Shops" Commerce MiddleWealth 20 0 20) 0.55 0.67 0.05
-              parcel "Civic Office Row" CommercialZone MediumDensity 18.0 7.0 (building "Civic Analytics Offices" Commerce MiddleWealth 60 0 60) 0.62 0.70 0.04
-              parcel "Foundry District" IndustrialZone MediumDensity 12.0 -6.0 (building "Foundry Cooperative Works" Industry LowWealth 55 0 55) 0.30 0.35 0.36
-              parcel "Freight Terminal Yard" IndustrialZone LowDensity -1.5 1.0 (building "North Freight Terminal" Industry LowWealth 24 0 24) 0.28 0.32 0.30
-              parcel "Juniper Elementary Campus" CivicZone LowDensity 4.2 5.3 (building "Juniper Elementary" PublicService MiddleWealth 120 0 14) 0.58 0.76 0.02
-              parcel "Juniper Park Commons" ParkZone LowDensity 8.0 4.0 (building "Juniper Park" Recreation MiddleWealth 0 0 0) 0.64 0.82 0.01
-              parcel "South Expansion Tract" Unzoned LowDensity 10.0 -1.0 None 0.34 0.42 0.08 ]
+            [ parcel "Old Rowhouse Block" ResidentialZone LowDensity 180.0 430.0 (building "Rowhouses" Housing MiddleWealth 10 3 0) 0.48 0.62 0.04
+              parcel "Canal Apartments Block" ResidentialZone MediumDensity 300.0 430.0 (building "Canal Apartments" Housing MiddleWealth 32 18 0) 0.54 0.66 0.05
+              parcel "North Starter Lots" ResidentialZone LowDensity 210.0 560.0 None 0.42 0.58 0.03
+              parcel "Main Street Retail" CommercialZone LowDensity 420.0 330.0 (building "Local Shops" Commerce MiddleWealth 20 0 20) 0.55 0.67 0.05
+              parcel "Civic Office Row" CommercialZone MediumDensity 620.0 500.0 (building "Civic Analytics Offices" Commerce MiddleWealth 60 0 60) 0.62 0.70 0.04
+              parcel "Foundry District" IndustrialZone MediumDensity 780.0 220.0 (building "Foundry Cooperative Works" Industry LowWealth 55 0 55) 0.30 0.35 0.36
+              parcel "Freight Terminal Yard" IndustrialZone LowDensity 80.0 360.0 (building "North Freight Terminal" Industry LowWealth 24 0 24) 0.28 0.32 0.30
+              parcel "Juniper Elementary Campus" CivicZone LowDensity 300.0 640.0 (building "Juniper Elementary" PublicService MiddleWealth 120 0 14) 0.58 0.76 0.02
+              parcel "Juniper Park Commons" ParkZone LowDensity 430.0 650.0 (building "Juniper Park" Recreation MiddleWealth 0 0 0) 0.64 0.82 0.01
+              parcel "South Expansion Tract" Unzoned LowDensity 640.0 260.0 None 0.34 0.42 0.08 ]
             |> List.map (fun parcel -> parcel.Id, parcel)
             |> Map.ofList
 
@@ -604,78 +604,78 @@ module Juniper =
                 Used = 0.0
                 MonthlyCost = 950m
                 Pollution = 0.24
-                Position = { X = 13.5; Y = -7.0 } }
+                Position = { X = 790.0; Y = 160.0 } }
               { Name = "Water Tower"
                 Kind = WaterUtility
                 Capacity = 95.0
                 Used = 0.0
                 MonthlyCost = 420m
                 Pollution = 0.01
-                Position = { X = 2.5; Y = 4.0 } }
+                Position = { X = 230.0; Y = 600.0 } }
               { Name = "Sewage Lagoon"
                 Kind = SewageUtility
                 Capacity = 80.0
                 Used = 0.0
                 MonthlyCost = 360m
                 Pollution = 0.18
-                Position = { X = 14.0; Y = -8.0 } }
+                Position = { X = 820.0; Y = 140.0 } }
               { Name = "County Landfill"
                 Kind = GarbageUtility
                 Capacity = 70.0
                 Used = 0.0
                 MonthlyCost = 280m
                 Pollution = 0.20
-                Position = { X = -3.0; Y = -4.0 } } ]
+                Position = { X = 920.0; Y = 180.0 } } ]
 
         let services =
             [ { Name = "Small Police Station"
                 Kind = PoliceService
-                CoverageRadius = 9.0
+                CoverageRadius = 260.0
                 Capacity = 80.0
                 Used = 0.0
                 MonthlyCost = 520m
                 Effectiveness = 0.72
-                Position = { X = 6.5; Y = 1.0 } }
+                Position = { X = 520.0; Y = 410.0 } }
               { Name = "Volunteer Fire House"
                 Kind = FireService
-                CoverageRadius = 8.0
+                CoverageRadius = 240.0
                 Capacity = 60.0
                 Used = 0.0
                 MonthlyCost = 480m
                 Effectiveness = 0.68
-                Position = { X = 5.5; Y = 1.2 } }
+                Position = { X = 500.0; Y = 410.0 } }
               { Name = "Neighborhood Clinic"
                 Kind = HealthService
-                CoverageRadius = 7.0
+                CoverageRadius = 220.0
                 Capacity = 90.0
                 Used = 0.0
                 MonthlyCost = 650m
                 Effectiveness = 0.70
-                Position = { X = 4.0; Y = 2.0 } }
+                Position = { X = 420.0; Y = 410.0 } }
               { Name = "Juniper Elementary"
                 Kind = EducationService
-                CoverageRadius = 10.0
+                CoverageRadius = 300.0
                 Capacity = 140.0
                 Used = 0.0
                 MonthlyCost = 820m
                 Effectiveness = 0.76
-                Position = { X = 4.2; Y = 5.3 } }
+                Position = { X = 300.0; Y = 640.0 } }
               { Name = "Juniper Park"
                 Kind = ParkService
-                CoverageRadius = 8.0
+                CoverageRadius = 260.0
                 Capacity = 300.0
                 Used = 0.0
                 MonthlyCost = 180m
                 Effectiveness = 0.82
-                Position = { X = 8.0; Y = 4.0 } }
+                Position = { X = 430.0; Y = 650.0 } }
               { Name = "Two Bus Routes"
                 Kind = TransitService
-                CoverageRadius = 11.0
+                CoverageRadius = 360.0
                 Capacity = 280.0
                 Used = 0.0
                 MonthlyCost = 390m
                 Effectiveness = 0.55
-                Position = { X = 6.0; Y = 1.0 } } ]
+                Position = { X = 360.0; Y = 360.0 } } ]
 
         let initialIndicators =
             { Population = 0
@@ -1034,24 +1034,24 @@ module Juniper =
               Features =
                 [ { Name = "Juniper River floodplain"
                     Kind = Floodplain
-                    Center = { X = 5.0; Y = 0.6 }
-                    RadiusMeters = 1800.0
+                    Center = { X = 360.0; Y = 300.0 }
+                    RadiusMeters = 180.0
                     BarrierStrength = 0.35
                     AmenityValue = 0.30
                     FloodRisk = 0.42
                     PollutionBuffer = 0.10 }
                   { Name = "Old canal corridor"
                     Kind = River
-                    Center = { X = 6.0; Y = 1.0 }
-                    RadiusMeters = 900.0
+                    Center = { X = 360.0; Y = 360.0 }
+                    RadiusMeters = 90.0
                     BarrierStrength = 0.28
                     AmenityValue = 0.22
                     FloodRisk = 0.30
                     PollutionBuffer = 0.06 }
                   { Name = "Juniper Park commons"
                     Kind = Parkland
-                    Center = { X = 8.0; Y = 4.0 }
-                    RadiusMeters = 650.0
+                    Center = { X = 430.0; Y = 650.0 }
+                    RadiusMeters = 80.0
                     BarrierStrength = 0.05
                     AmenityValue = 0.78
                     FloodRisk = 0.06
@@ -1068,7 +1068,7 @@ module Juniper =
                 Name = "Juniper Falls"
                 SettlementType = SmallTown
                 Archetype = HistoricGrid
-                Center = { X = 6.0; Y = 1.8 }
+                Center = { X = 410.0; Y = 410.0 }
                 PopulationTarget = 3800
                 EmploymentTarget = 1250
                 RoadPattern = "legacy main-street grid with canal breaks"
@@ -1093,7 +1093,7 @@ module Juniper =
                 Name = "River Works Edge"
                 SettlementType = IndustrialDistrict
                 Archetype = IndustrialWaterfront
-                Center = { X = 12.0; Y = -5.0 }
+                Center = { X = 740.0; Y = 220.0 }
                 PopulationTarget = 120
                 EmploymentTarget = 420
                 RoadPattern = "freight-oriented arterial spurs"
@@ -1119,7 +1119,7 @@ module Juniper =
                 Settlement = juniperSettlement
                 Name = "Downtown Juniper Grid"
                 Archetype = DowntownCore
-                Center = { X = 6.0; Y = 2.0 }
+                Center = { X = 470.0; Y = 390.0 }
                 Neighborhoods = [ downtown ] |> Set.ofList
                 DominantLandUses = [ MixedUse; NeighborhoodCommercial; CivicAdministrative; MultifamilyResidential ] |> Set.ofList
                 RoadClasses = [ LocalStreet; Collector; Arterial; TransitCorridor ] |> Set.ofList
@@ -1135,7 +1135,7 @@ module Juniper =
                 Settlement = juniperSettlement
                 Name = "Canal Apartment Corridor"
                 Archetype = AgingApartmentCorridor
-                Center = { X = 4.0; Y = 2.8 }
+                Center = { X = 260.0; Y = 520.0 }
                 Neighborhoods = [ downtown ] |> Set.ofList
                 DominantLandUses = [ MultifamilyResidential; SchoolUse; ParkOpenSpace ] |> Set.ofList
                 RoadClasses = [ Collector; LocalStreet; BikePath ] |> Set.ofList
@@ -1151,7 +1151,7 @@ module Juniper =
                 Settlement = riverWorksSettlement
                 Name = "Foundry and Freight Edge"
                 Archetype = WarehouseDistrict
-                Center = { X = 12.0; Y = -5.4 }
+                Center = { X = 740.0; Y = 220.0 }
                 Neighborhoods = [ eastMarket ] |> Set.ofList
                 DominantLandUses = [ IndustrialUse; WarehouseLogistics; UtilityUse ] |> Set.ofList
                 RoadClasses = [ IndustrialRoad; FreightCorridor; Highway ] |> Set.ofList
@@ -1181,7 +1181,7 @@ module Juniper =
                 District = canalDistrict
                 Name = "Canal housing catchment"
                 Parcels = parcelsNamed ([ "Old Rowhouse Block"; "Canal Apartments Block"; "North Starter Lots" ] |> Set.ofList)
-                BoundaryCenter = { X = 3.0; Y = 2.8 }
+                BoundaryCenter = { X = 240.0; Y = 500.0 }
                 ApproxAreaSqMeters = 56000.0
                 DominantUse = MultifamilyResidential
                 RoadFrontage = roadFrontage ([ "West Main Street"; "School Avenue" ] |> Set.ofList)
@@ -1193,7 +1193,7 @@ module Juniper =
                 District = downtownDistrict
                 Name = "Main Street retail block"
                 Parcels = parcelsNamed ([ "Main Street Retail"; "Civic Office Row"; "Juniper Park Commons"; "Juniper Elementary Campus" ] |> Set.ofList)
-                BoundaryCenter = { X = 8.0; Y = 3.4 }
+                BoundaryCenter = { X = 470.0; Y = 420.0 }
                 ApproxAreaSqMeters = 74000.0
                 DominantUse = MixedUse
                 RoadFrontage = roadFrontage ([ "Central Main Street"; "Civic Parkway"; "School Avenue" ] |> Set.ofList)
@@ -1205,7 +1205,7 @@ module Juniper =
                 District = industrialDistrict
                 Name = "Foundry freight superblock"
                 Parcels = parcelsNamed ([ "Foundry District"; "Freight Terminal Yard"; "South Expansion Tract" ] |> Set.ofList)
-                BoundaryCenter = { X = 9.5; Y = -3.8 }
+                BoundaryCenter = { X = 700.0; Y = 250.0 }
                 ApproxAreaSqMeters = 142000.0
                 DominantUse = WarehouseLogistics
                 RoadFrontage = roadFrontage ([ "Foundry Road"; "Regional Connector"; "Central Main Street" ] |> Set.ofList)
@@ -1217,7 +1217,7 @@ module Juniper =
                 District = downtownDistrict
                 Name = "Civic service block"
                 Parcels = parcelsNamed ([ "Juniper Elementary Campus"; "Juniper Park Commons" ] |> Set.ofList)
-                BoundaryCenter = { X = 5.8; Y = 5.0 }
+                BoundaryCenter = { X = 350.0; Y = 630.0 }
                 ApproxAreaSqMeters = 42000.0
                 DominantUse = CivicAdministrative
                 RoadFrontage = roadFrontage ([ "School Avenue"; "Central Main Street" ] |> Set.ofList)
@@ -1281,7 +1281,7 @@ module Juniper =
                 Name = "Rowhouse stop"
                 Place = Some homeA
                 Node = Some westNode
-                Position = { X = 0.2; Y = 0.9 }
+                Position = { X = 170.0; Y = 365.0 }
                 Accessibility = 0.68
                 PerceivedSafety = 0.62 }
               stopHomeB,
@@ -1289,7 +1289,7 @@ module Juniper =
                 Name = "Canal Apartments stop"
                 Place = Some homeB
                 Node = Some midNode
-                Position = { X = 6.0; Y = 1.4 }
+                Position = { X = 350.0; Y = 370.0 }
                 Accessibility = 0.76
                 PerceivedSafety = 0.66 }
               stopSchool,
@@ -1297,7 +1297,7 @@ module Juniper =
                 Name = "Elementary stop"
                 Place = Some elementary
                 Node = Some schoolNode
-                Position = { X = 4.1; Y = 5.0 }
+                Position = { X = 305.0; Y = 610.0 }
                 Accessibility = 0.82
                 PerceivedSafety = 0.74 }
               stopOffice,
@@ -1305,7 +1305,7 @@ module Juniper =
                 Name = "Civic campus stop"
                 Place = Some office
                 Node = Some officeNode
-                Position = { X = 18.0; Y = 6.3 }
+                Position = { X = 565.0; Y = 485.0 }
                 Accessibility = 0.62
                 PerceivedSafety = 0.58 }
               stopFoundry,
@@ -1313,7 +1313,7 @@ module Juniper =
                 Name = "Foundry gate stop"
                 Place = Some workshop
                 Node = Some industryNode
-                Position = { X = 12.0; Y = -4.4 }
+                Position = { X = 730.0; Y = 235.0 }
                 Accessibility = 0.48
                 PerceivedSafety = 0.46 } ]
             |> Map.ofList
@@ -1694,7 +1694,7 @@ module Juniper =
                 { Places = places |> List.map (fun place -> place.Id, place) |> Map.ofList
                   RoadNodes = roadNodeMap
                   RoadSegments = roadSegments
-                  MetersPerMapUnit = 500.0 }
+                  MetersPerMapUnit = 8.0 }
               City = city
               Diagnostics = { OverallFragility = 0.0; Risks = [] }
               GenerationReport = generationReport

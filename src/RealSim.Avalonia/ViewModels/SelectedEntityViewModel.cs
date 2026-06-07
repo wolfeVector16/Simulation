@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using RealSim.Avalonia.Models;
 
@@ -35,6 +36,12 @@ public sealed partial class SelectedEntityViewModel : ObservableObject
         }
 
         Details.Add($"Drawn points: {primitive.Points.Count}");
+        if (primitive.Points.Count > 0)
+        {
+            var x = primitive.Points.Select(point => point.X).Average();
+            var y = primitive.Points.Select(point => point.Y).Average();
+            Details.Add($"Map coordinate: {x:0}, {y:0}");
+        }
     }
 
     public void Show(MovingEntityViewModel? entity)
@@ -59,6 +66,19 @@ public sealed partial class SelectedEntityViewModel : ObservableObject
         Details.Add($"Status: {entity.Status}");
         Details.Add($"Progress: {entity.Progress:P0}");
         Details.Add($"Route points: {entity.RoutePolyline.Count}");
+        Details.Add($"Current coordinate: {entity.CurrentPosition.X:0}, {entity.CurrentPosition.Y:0}");
+        if (entity.RoutePolyline.Count >= 2)
+        {
+            var length = 0.0;
+            for (var i = 0; i < entity.RoutePolyline.Count - 1; i++)
+            {
+                var a = entity.RoutePolyline[i];
+                var b = entity.RoutePolyline[i + 1];
+                length += System.Math.Sqrt(System.Math.Pow(a.X - b.X, 2.0) + System.Math.Pow(a.Y - b.Y, 2.0));
+            }
+
+            Details.Add($"Route length: {length:0} map units");
+        }
         if (entity.IsApproximate)
         {
             Details.Add("Route is approximate: drawn from origin/destination or partial route data.");

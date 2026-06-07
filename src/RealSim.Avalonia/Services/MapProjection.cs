@@ -52,8 +52,10 @@ public static class MapProjection
         primitives.AddRange(ProjectMovingEntityPrimitives(movingEntities));
         primitives.AddRange(ProjectEventMarkers(world, places, roadNodes, roadSegments, neighborhoodCenters, project));
 
+        var semanticPrimitives = primitives.Select(ApplyVisualGrammar).ToArray();
+
         return new MapProjectionResult(
-            primitives.OrderBy(LayerOrder).ThenBy(primitive => primitive.Id).ToArray(),
+            semanticPrimitives.OrderBy(primitive => primitive.Layer).ThenBy(primitive => primitive.Id).ToArray(),
             CanvasWidth,
             CanvasHeight,
             CreateLegend(),
@@ -116,10 +118,10 @@ public static class MapProjection
                 Id: $"feature:{feature.Name}",
                 Kind: MapPrimitiveKind.Geography,
                 Name: feature.Name,
-                Points: Ellipse(center, radius * 1.35, radius, 24),
+                Points: Rectangle(center, radius * 1.35, radius),
                 Fill: GeographyFill(kind),
                 Stroke: GeographyStroke(kind),
-                Thickness: 1.0,
+                Thickness: 0.6,
                 Radius: 0.0,
                 Details: $"{Readable(kind)} feature, amenity={feature.AmenityValue:0.00}, floodRisk={feature.FloodRisk:0.00}",
                 Category: kind,
@@ -127,7 +129,8 @@ public static class MapProjection
                     ? MapSymbol.Tree
                     : MapSymbol.Polygon,
                 LabelMinZoom: 1.2,
-                LabelPriority: 80);
+                LabelPriority: 80,
+                IsApproximate: true);
         }
     }
 
@@ -138,22 +141,21 @@ public static class MapProjection
         foreach (var item in FSharpInterop.Pairs(world.Neighborhoods).OrderBy(item => item.Key.ToString()))
         {
             var center = centers[item.Key];
-            var pressureTint = (int)Math.Round(Math.Clamp(item.Value.RentPressure, 0.0, 1.0) * 45.0);
-
             yield return new MapPrimitive(
                 Id: item.Key.ToString(),
                 Kind: MapPrimitiveKind.Neighborhood,
                 Name: item.Value.Name,
-                Points: Ellipse(center, 160, 104, 24),
-                Fill: $"#3F5E7A{(15 + pressureTint / 2).ToString("X2", CultureInfo.InvariantCulture)}",
-                Stroke: "#6F89B8",
-                Thickness: 0.8,
+                Points: Rectangle(center, 260, 180),
+                Fill: "#00000000",
+                Stroke: "#8DA1B680",
+                Thickness: 0.45,
                 Radius: 0.0,
                 Details: $"population={item.Value.Residents.Count}, land value={item.Value.LandValue:0.00}, rent pressure={item.Value.RentPressure:0.00}, safety={item.Value.Safety:0.00}, transit={item.Value.TransitAccess:0.00}",
                 Category: "Neighborhood",
                 Symbol: MapSymbol.Polygon,
                 LabelMinZoom: 0.0,
-                LabelPriority: 1);
+                LabelPriority: 12,
+                IsApproximate: true);
         }
     }
 
@@ -309,19 +311,23 @@ public static class MapProjection
             var place = item.Value;
             var kind = place.Kind.ToString();
             var point = OffsetForId(project(place.Position), item.Key.ToString(), 6.0);
+            var symbol = PlaceSymbol(kind);
+            var points = kind == "Park"
+                ? Rectangle(point, 34.0, 24.0)
+                : SchematicFootprint(point, PlaceFootprintWidth(kind), PlaceFootprintHeight(kind), item.Key.ToString());
 
             yield return new MapPrimitive(
                 Id: item.Key.ToString(),
                 Kind: MapPrimitiveKind.Place,
                 Name: place.Name,
-                Points: SymbolShape(point, PlaceRadius(kind), PlaceSymbol(kind)),
+                Points: points,
                 Fill: PlaceFill(kind),
                 Stroke: PlaceStroke(kind),
-                Thickness: 1.3,
-                Radius: PlaceSymbol(kind) is MapSymbol.Circle or MapSymbol.Tree ? PlaceRadius(kind) : 0.0,
+                Thickness: kind == "Park" ? 0.8 : 1.0,
+                Radius: 0.0,
                 Details: $"type={Readable(kind)}, access={Readable(place.RoadAccess.ToString())}",
                 Category: kind,
-                Symbol: PlaceSymbol(kind),
+                Symbol: symbol,
                 LabelMinZoom: kind is "School" or "Daycare" or "Civic" or "Park" ? 0.95 : 1.85,
                 LabelPriority: kind is "School" or "Daycare" or "Civic" ? 35 : 86);
         }
@@ -873,6 +879,17 @@ public static class MapProjection
             : Rectangle(center, width, height);
     }
 
+    private static IReadOnlyList<MapPoint> SchematicFootprint(MapPoint center, double width, double height, string id)
+    {
+        var snapped = SnapToGrid(OffsetForId(center, $"footprint:{id}", 4.0), 6.0);
+        return Rectangle(snapped, width, height);
+    }
+
+    private static MapPoint SnapToGrid(MapPoint point, double grid)
+    {
+        return new MapPoint(Math.Round(point.X / grid) * grid, Math.Round(point.Y / grid) * grid);
+    }
+
     private static IReadOnlyList<MapPoint> SymbolShape(MapPoint center, double size, MapSymbol symbol)
     {
         return symbol switch
@@ -1013,10 +1030,10 @@ public static class MapProjection
     {
         return kind switch
         {
-            "River" or "Lake" or "Coastline" or "Wetland" => "#82C7E655",
-            "Forest" or "Parkland" => "#6DBB7655",
-            "Floodplain" => "#B6D7A855",
-            _ => "#E6D8AD45"
+            "River" or "Lake" or "Coastline" or "Wetland" => "#82C7E633",
+            "Forest" or "Parkland" => "#6DBB7630",
+            "Floodplain" => "#B6D7A824",
+            _ => "#E6D8AD22"
         };
     }
 
@@ -1103,7 +1120,7 @@ public static class MapProjection
             "Commercial" => "#FFB703",
             "Industrial" or "Warehouse" => "#936639",
             "School" or "Daycare" => "#4895EF",
-            "Park" => "#52B788",
+            "Park" => "#52B78866",
             "Civic" => "#72EFDD",
             "OutsideConnection" => "#ADB5BD",
             _ => "#CED4DA"
@@ -1148,6 +1165,32 @@ public static class MapProjection
             "Park" => 6.0,
             "Civic" => 6.0,
             _ => 4.0
+        };
+    }
+
+    private static double PlaceFootprintWidth(string kind)
+    {
+        return kind switch
+        {
+            "Commercial" => 16.0,
+            "Industrial" or "Warehouse" => 20.0,
+            "School" or "Daycare" => 18.0,
+            "Civic" => 18.0,
+            "Residence" => 12.0,
+            _ => 12.0
+        };
+    }
+
+    private static double PlaceFootprintHeight(string kind)
+    {
+        return kind switch
+        {
+            "Commercial" => 12.0,
+            "Industrial" or "Warehouse" => 16.0,
+            "School" or "Daycare" => 14.0,
+            "Civic" => 14.0,
+            "Residence" => 10.0,
+            _ => 10.0
         };
     }
 
@@ -1208,15 +1251,15 @@ public static class MapProjection
     {
         return roadClass switch
         {
-            "Highway" or "Freeway" => 8.5,
-            "Arterial" => 6.5,
-            "Collector" => 4.5,
-            "IndustrialRoad" or "FreightCorridor" => 5.0,
-            "TransitCorridor" or "TransitMall" => 4.8,
-            "LocalStreet" => 3.2,
-            "Alley" or "ServiceRoad" => 2.2,
-            "PedestrianPath" or "BikePath" => 2.2,
-            _ => 3.0
+            "Highway" or "Freeway" => 5.4,
+            "Arterial" => 4.0,
+            "Collector" => 2.8,
+            "IndustrialRoad" or "FreightCorridor" => 3.0,
+            "TransitCorridor" or "TransitMall" => 2.8,
+            "LocalStreet" => 1.8,
+            "Alley" or "ServiceRoad" => 1.2,
+            "PedestrianPath" or "BikePath" => 1.2,
+            _ => 1.8
         };
     }
 
@@ -1378,9 +1421,9 @@ public static class MapProjection
             MovingEntityKind.Bus => 7.0,
             MovingEntityKind.FreightTruck => 7.5,
             MovingEntityKind.EmergencyVehicle => 7.0,
-            MovingEntityKind.Pedestrian => 4.8,
-            MovingEntityKind.Bike => 5.2,
-            _ => 6.0
+            MovingEntityKind.Pedestrian => 2.8,
+            MovingEntityKind.Bike => 3.4,
+            _ => 4.2
         };
     }
 
@@ -1388,44 +1431,83 @@ public static class MapProjection
     {
         return new[]
         {
-            new LegendItem("Neighborhood", "soft region with boundary and name", "#3F5E7A70", "#6F89B8", 1.4, MapSymbol.Polygon),
-            new LegendItem("Highway/freeway", "thick dark road", "#00000000", "#24292F", 7.2, MapSymbol.Polygon),
-            new LegendItem("Arterial", "medium orange road", "#00000000", "#D77A00", 5.3, MapSymbol.Polygon),
-            new LegendItem("Local street", "thin light road", "#00000000", "#ADB5BD", 2.4, MapSymbol.Polygon),
-            new LegendItem("Ped/bike path", "dotted or dashed green path", "#00000000", "#00A896", 1.8, MapSymbol.Polygon, MapLineStyle.Dashed),
-            new LegendItem("Transit route", "colored dashed route overlay", "#00000000", "#8338EC", 2.4, MapSymbol.Bus, MapLineStyle.Dashed),
-            new LegendItem("Residential", "house-shaped building/place", "#8ECAE6", "#1F5F7A", 1.4, MapSymbol.House),
-            new LegendItem("Commercial", "storefront marker", "#FFD166", "#8A5A00", 1.4, MapSymbol.Storefront),
-            new LegendItem("Industrial", "warehouse marker", "#B08968", "#5D4037", 1.4, MapSymbol.Warehouse),
-            new LegendItem("Institution", "school, civic, cross, shield, or transit marker", "#4895EF", "#063B7A", 1.8, MapSymbol.School),
-            new LegendItem("Park/open space", "green region or tree marker", "#52B788", "#1B4332", 1.2, MapSymbol.Tree),
-            new LegendItem("Sim/person", "small moving circle", "#FFFFFF", "#111111", 1.2, MapSymbol.Person),
-            new LegendItem("Vehicle", "mode-specific moving marker", "#118AB2", "#073B4C", 1.2, MapSymbol.Vehicle),
-            new LegendItem("Active route", "thin route line to destination", "#00000000", "#118AB2", 1.5, MapSymbol.Destination),
-            new LegendItem("Selected", "bright yellow outline", "#FFF3B0", "#FFD60A", 3.0, MapSymbol.Square),
-            new LegendItem("Recent event", "small warning marker at event location", "#EF476F", "#2B1700", 1.3, MapSymbol.Warning)
+            new LegendItem("Road", "width shows road class", "#00000000", "#24292F", 5.5, MapSymbol.Polygon),
+            new LegendItem("Highway road", "thick dark major road", "#00000000", "#24292F", 7.2, MapSymbol.Polygon),
+            new LegendItem("Residential building", "blue footprint", "#8ECAE6", "#1F5F7A", 1.0, MapSymbol.Square),
+            new LegendItem("Commercial building", "yellow footprint", "#FFD166", "#8A5A00", 1.0, MapSymbol.Square),
+            new LegendItem("Industrial building", "brown footprint", "#B08968", "#5D4037", 1.0, MapSymbol.Square),
+            new LegendItem("Civic/institution", "small marked footprint", "#4895EF", "#063B7A", 1.4, MapSymbol.School),
+            new LegendItem("Vehicle", "small directional marker", "#118AB2", "#073B4C", 1.2, MapSymbol.Vehicle),
+            new LegendItem("Pedestrian/sim", "tiny person dot", "#FFFFFF", "#111111", 1.0, MapSymbol.Person),
+            new LegendItem("Transit", "dashed route and stops", "#00000000", "#8338EC", 2.2, MapSymbol.Bus, MapLineStyle.Dashed),
+            new LegendItem("Park/open space", "subtle green terrain", "#52B78833", "#1B4332", 0.8, MapSymbol.Polygon),
+            new LegendItem("Selected entity", "yellow ring and label", "#FFF3B0", "#FFD60A", 3.0, MapSymbol.Square),
+            new LegendItem("Recent event/warning", "important marker", "#EF476F", "#2B1700", 1.3, MapSymbol.Warning)
         };
     }
 
-    private static int LayerOrder(MapPrimitive primitive)
+    private static MapPrimitive ApplyVisualGrammar(MapPrimitive primitive)
     {
-        return primitive.Kind switch
+        var role = primitive.Kind switch
         {
-            MapPrimitiveKind.Geography => 0,
-            MapPrimitiveKind.Neighborhood => 1,
-            MapPrimitiveKind.Parcel => 2,
-            MapPrimitiveKind.Building => 3,
-            MapPrimitiveKind.Road => 4,
-            MapPrimitiveKind.RoadStatus => 5,
-            MapPrimitiveKind.TransitRoute => 6,
-            MapPrimitiveKind.ActiveRoute => 7,
-            MapPrimitiveKind.Place => 8,
-            MapPrimitiveKind.Institution => 9,
-            MapPrimitiveKind.Household => 10,
-            MapPrimitiveKind.Destination => 11,
-            MapPrimitiveKind.EventMarker => 12,
-            MapPrimitiveKind.MovingEntity => 13,
-            _ => 14
+            MapPrimitiveKind.Geography when primitive.Category.Contains("Park", StringComparison.OrdinalIgnoreCase) ||
+                                           primitive.Category.Contains("Forest", StringComparison.OrdinalIgnoreCase) => primitive.IsApproximate ? VisualRole.Debug : VisualRole.Park,
+            MapPrimitiveKind.Geography => VisualRole.Terrain,
+            MapPrimitiveKind.Neighborhood => VisualRole.NeighborhoodBoundary,
+            MapPrimitiveKind.Parcel or MapPrimitiveKind.Building => VisualRole.BuildingFootprint,
+            MapPrimitiveKind.Road or MapPrimitiveKind.RoadStatus => VisualRole.Road,
+            MapPrimitiveKind.TransitRoute or MapPrimitiveKind.ActiveRoute => VisualRole.TransitRoute,
+            MapPrimitiveKind.Institution => VisualRole.InstitutionMarker,
+            MapPrimitiveKind.MovingEntity when primitive.Symbol == MapSymbol.Person => VisualRole.Pedestrian,
+            MapPrimitiveKind.MovingEntity => VisualRole.Vehicle,
+            MapPrimitiveKind.EventMarker => VisualRole.Event,
+            MapPrimitiveKind.Place when primitive.Category == "Park" => VisualRole.Park,
+            MapPrimitiveKind.Household => VisualRole.Debug,
+            _ => VisualRole.Debug
+        };
+
+        var geometry = primitive.Kind switch
+        {
+            MapPrimitiveKind.Road or MapPrimitiveKind.RoadStatus or MapPrimitiveKind.TransitRoute or MapPrimitiveKind.ActiveRoute => MapGeometryType.Line,
+            MapPrimitiveKind.Building or MapPrimitiveKind.Parcel or MapPrimitiveKind.Institution => MapGeometryType.Footprint,
+            MapPrimitiveKind.Place when primitive.Category == "Park" => MapGeometryType.Polygon,
+            MapPrimitiveKind.Place => MapGeometryType.Footprint,
+            MapPrimitiveKind.Household or MapPrimitiveKind.Destination or MapPrimitiveKind.EventMarker or MapPrimitiveKind.MovingEntity => MapGeometryType.Point,
+            _ => MapGeometryType.Polygon
+        };
+
+        var layer = role switch
+        {
+            VisualRole.Terrain => 0,
+            VisualRole.Park => 1,
+            VisualRole.NeighborhoodBoundary => 2,
+            VisualRole.BuildingFootprint => 3,
+            VisualRole.Road => 4,
+            VisualRole.TransitRoute => 5,
+            VisualRole.Vehicle or VisualRole.Pedestrian => 6,
+            VisualRole.InstitutionMarker => 7,
+            VisualRole.Event => 8,
+            VisualRole.Selection => 9,
+            _ => 10
+        };
+
+        var clutter = primitive.Kind switch
+        {
+            MapPrimitiveKind.Household => MapClutterBehavior.Cluster,
+            MapPrimitiveKind.EventMarker => MapClutterBehavior.HideWhenCrowded,
+            MapPrimitiveKind.MovingEntity => MapClutterBehavior.Cluster,
+            MapPrimitiveKind.Place => MapClutterBehavior.HideWhenCrowded,
+            _ => MapClutterBehavior.Keep
+        };
+
+        return primitive with
+        {
+            VisualRole = role,
+            Layer = layer,
+            GeometryType = geometry,
+            ClutterBehavior = clutter,
+            SymbolRole = role.ToString(),
+            IsSelectable = primitive.Kind != MapPrimitiveKind.RoadStatus
         };
     }
 }
