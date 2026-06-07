@@ -7,9 +7,9 @@ type DomainEvent =
     | JobStarted of EventId * SimId * PlaceId
     | JobLost of EventId * SimId * InstitutionId option
     | RentIncreased of EventId * HouseholdId * oldRent: decimal * newRent: decimal
-    | BillDue of EventId * HouseholdId * amount: decimal
-    | BillPaid of EventId * HouseholdId * amount: decimal
-    | BillMissed of EventId * HouseholdId * amount: decimal
+    | BillDue of EventId * HouseholdId * BillKind * amount: decimal
+    | BillPaid of EventId * HouseholdId * BillKind * amount: decimal * recipient: BillRecipient
+    | BillMissed of EventId * HouseholdId * BillKind * amount: decimal
     | EvictionFiled of EventId * HouseholdId * UnitId
     | EvictionCompleted of EventId * HouseholdId * UnitId
     | IllnessOccurred of EventId * SimId

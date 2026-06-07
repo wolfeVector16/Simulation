@@ -155,6 +155,22 @@ module Diagnostics =
 
         clamp01 (0.30 + unbuiltDemand * 0.35 + min 1.0 (vacantUsefulParcels / 5.0) * 0.35)
 
+    let private householdEconomyViolations world =
+        world.Households
+        |> Map.toSeq
+        |> Seq.collect (fun (_, household) ->
+            [ if household.BillsDue < 0m || household.BillsDue > HouseholdEconomy.maxHouseholdBillsDue then
+                  sprintf "Household %s has impossible bills due: %.0f." household.Name (float household.BillsDue)
+              if household.MonthlyExpenses < 0m || household.MonthlyExpenses > HouseholdEconomy.maxReasonableMonthlyExpense then
+                  sprintf "Household %s has impossible monthly expenses: %.0f." household.Name (float household.MonthlyExpenses)
+              match household.RentMonthly with
+              | Some rent when rent < 0m || rent > HouseholdEconomy.maxReasonableRent ->
+                  sprintf "Household %s has impossible rent: %.0f." household.Name (float rent)
+              | _ -> ()
+              if household.Funds < 0m || household.Funds > HouseholdEconomy.maxReasonableHouseholdFunds then
+                  sprintf "Household %s has impossible funds: %.0f." household.Name (float household.Funds) ])
+        |> Seq.toList
+
     let tick world =
         let affordability = affordabilityScore world
         let inequality = inequalityScore world
@@ -164,9 +180,12 @@ module Diagnostics =
         let transport = transportScore world
         let services = serviceQualityScore world
         let finance = capitalFinanceScore world
+        let householdEconomyViolations = householdEconomyViolations world
 
         let risks =
-            [ risk PoliticsAndGovernance 0.72 "The city still acts like a benevolent-dictator planning model; councils, voters, lawsuits, procurement, and legitimacy are not yet actors."
+            [ if not householdEconomyViolations.IsEmpty then
+                  risk Inequality 1.0 (householdEconomyViolations |> List.head)
+              risk PoliticsAndGovernance 0.72 "The city still acts like a benevolent-dictator planning model; councils, voters, lawsuits, procurement, and legitimacy are not yet actors."
               risk LandOwnership 0.66 "Housing units now have owners, rents, and legal status; parcels/lots still need ownership history, mortgages, speculation, and property-right constraints."
               risk HousingAffordability affordability "Rent pressure and household housing status exist, but displacement, subsidies, search friction, and homelessness need explicit mechanics."
               risk CapitalAndFinance finance "Development responds directly to demand; financing risk, interest rates, developer strategy, materials, and labor markets are not yet constraining projects."

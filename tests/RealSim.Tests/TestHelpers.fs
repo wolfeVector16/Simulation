@@ -38,6 +38,15 @@ module Invariants =
         world.Households
         |> Map.iter (fun householdId household ->
             Assert.Equal<HouseholdId>(householdId, household.Id)
+            Assert.True(household.BillsDue >= 0m, $"Household {household.Name} has negative bills due.")
+            Assert.True(household.BillsDue <= HouseholdEconomy.maxHouseholdBillsDue, $"Household {household.Name} has impossible bills due.")
+            Assert.True(household.MonthlyExpenses >= 0m, $"Household {household.Name} has negative monthly expenses.")
+            Assert.True(household.MonthlyExpenses <= HouseholdEconomy.maxReasonableMonthlyExpense, $"Household {household.Name} has impossible monthly expenses.")
+            household.RentMonthly |> Option.iter (fun rent ->
+                Assert.True(rent >= 0m, $"Household {household.Name} has negative rent.")
+                Assert.True(rent <= HouseholdEconomy.maxReasonableRent, $"Household {household.Name} has impossible rent."))
+            Assert.True(household.Funds >= 0m, $"Household {household.Name} has negative funds.")
+            Assert.True(household.Funds <= HouseholdEconomy.maxReasonableHouseholdFunds, $"Household {household.Name} has impossible funds.")
 
             household.Members
             |> Set.iter (fun simId ->
@@ -139,9 +148,9 @@ module Invariants =
                 assertContains "Event references missing sim." simId world.Sims
                 employer |> Option.iter (fun institutionId -> assertContains "Event references missing institution." institutionId world.Institutions)
             | RentIncreased(_, householdId, _, _)
-            | BillDue(_, householdId, _)
-            | BillPaid(_, householdId, _)
-            | BillMissed(_, householdId, _)
+            | BillDue(_, householdId, _, _)
+            | BillPaid(_, householdId, _, _, _)
+            | BillMissed(_, householdId, _, _)
             | HouseholdBudgetChanged(_, householdId, _) ->
                 assertContains "Event references missing household." householdId world.Households
             | EvictionFiled(_, householdId, unitId)

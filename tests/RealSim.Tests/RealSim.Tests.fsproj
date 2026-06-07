@@ -26,6 +26,8 @@
     <Compile Include="DeterminismTests.fs" />
     <Compile Include="WorldGenerationTests.fs" />
     <Compile Include="EventSystemTests.fs" />
+    <Compile Include="HouseholdEconomyTests.fs" />
+    <Compile Include="HouseholdBillRoutingTests.fs" />
     <Compile Include="TransportAndDecisionTests.fs" />
     <Compile Include="SocialAndInvariantTests.fs" />
     <Compile Include="PerformanceStructureTests.fs" />

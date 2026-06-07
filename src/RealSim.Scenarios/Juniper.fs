@@ -737,6 +737,7 @@ module Juniper =
                 SharedGoals = [ "keep stable housing"; "support Lena's school" ]
                 Objects = iversObjects
                 BillsDue = 0m
+                LastBilledWeek = None
                 Cleanliness = 0.82
                 LotValue = 92500m }
               householdB,
@@ -762,6 +763,7 @@ module Juniper =
                 SharedGoals = [ "build savings"; "stay close to work" ]
                 Objects = theoObjects
                 BillsDue = 0m
+                LastBilledWeek = None
                 Cleanliness = 0.58
                 LotValue = 41000m } ]
             |> Map.ofList
@@ -1696,6 +1698,10 @@ module Juniper =
               City = city
               Diagnostics = { OverallFragility = 0.0; Risks = [] }
               GenerationReport = generationReport
+              ExternalLedger =
+                { FinanceOutflow = 0m
+                  PrivateSectorOutflow = 0m
+                  ServiceSectorOutflow = 0m }
               Meta =
                 { Seed = 1337
                   Tick = 0

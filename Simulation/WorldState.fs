@@ -34,4 +34,5 @@ type World =
       City: CityState
       Diagnostics: SimulationDiagnostics
       GenerationReport: WorldGenerationReport
+      ExternalLedger: ExternalSectorLedger
       Meta: SimulationMeta }

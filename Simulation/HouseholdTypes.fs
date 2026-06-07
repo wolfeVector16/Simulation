@@ -25,5 +25,6 @@ type Household =
       SharedGoals: string list
       Objects: HouseholdObject list
       BillsDue: decimal
+      LastBilledWeek: int option
       Cleanliness: float
       LotValue: decimal }

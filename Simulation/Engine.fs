@@ -19,12 +19,16 @@ module Engine =
     let private deterministicEventId tick index =
         EventId(deterministicGuid tick (index + 10_000))
 
-    let private householdBudgetPressure household =
-        if household.BillsDue <= 0m then
+    let private householdBudgetPressure world household =
+        if not (HouseholdEconomy.isWeeklyBillingTime world) then
+            None
+        elif household.LastBilledWeek <> Some(HouseholdEconomy.billingCycle world) then
+            None
+        elif household.BillsDue <= 0m then
             None
         else
             let monthlyIncome = max 1m household.MonthlyIncome
-            let burden = decimal household.BillsDue / monthlyIncome |> float
+            let burden = HouseholdEconomy.normalizeBillsDue household.BillsDue / monthlyIncome |> float
             Some(clamp01 burden)
 
     let createSnapshot world =
@@ -50,7 +54,7 @@ module Engine =
             world.Households
             |> Map.toSeq
             |> Seq.choose (fun (householdId, household) ->
-                householdBudgetPressure household
+                householdBudgetPressure world household
                 |> Option.map (fun magnitude ->
                     { Entity = HouseholdEntity householdId
                       Kind = "household_budget"
@@ -71,8 +75,9 @@ module Engine =
                     world.Households
                     |> Map.tryFind householdId
                     |> Option.map (fun household ->
-                        let amount = household.BillsDue
-                        let chosenAction = if household.Funds >= amount then PayBillAction amount else DelayBillAction amount
+                        let amount = HouseholdEconomy.normalizeBillsDue household.BillsDue
+                        let charge = { Kind = LegacyBill; Amount = amount }
+                        let chosenAction = if household.Funds >= amount then PayBillAction charge else DelayBillAction charge
                         { Id = deterministicGuid pressureBatch.Tick world.Meta.Decisions.Length
                           PartitionKey = sprintf "%A" householdId
                           Decision =
@@ -113,10 +118,10 @@ module Engine =
             resolvedBatch.Resolved
             |> Array.choose (fun resolved ->
                 match resolved.Intent.Decision.Household, resolved.Intent.Decision.ChosenAction with
-                | Some householdId, PayBillAction amount ->
-                    Some(BillPaid(deterministicEventId resolvedBatch.Tick resolved.ResolutionRank, householdId, amount))
-                | Some householdId, DelayBillAction amount ->
-                    Some(BillMissed(deterministicEventId resolvedBatch.Tick resolved.ResolutionRank, householdId, amount))
+                | Some householdId, PayBillAction charge ->
+                    let recipient = HouseholdEconomy.billRecipient _world householdId charge.Kind
+                    Some(BillPaid(deterministicEventId resolvedBatch.Tick resolved.ResolutionRank, householdId, charge.Kind, charge.Amount, recipient))
+                | Some _, DelayBillAction _ -> None
                 | _ -> None)
 
         { Tick = resolvedBatch.Tick

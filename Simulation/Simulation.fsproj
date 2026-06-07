@@ -22,6 +22,7 @@
     <Compile Include="Domain.fs" />
     <Compile Include="Ids.fs" />
     <Compile Include="TimeTypes.fs" />
+    <Compile Include="BillTypes.fs" />
     <Compile Include="MeasureTypes.fs" />
     <Compile Include="Measures.fs" />
     <Compile Include="CommonTypes.fs" />
@@ -52,6 +53,7 @@
     <Compile Include="HouseholdTypes.fs" />
     <Compile Include="WorldIndexTypes.fs" />
     <Compile Include="WorldState.fs" />
+    <Compile Include="HouseholdEconomy.fs" />
     <Compile Include="MapGraph.fs" />
     <Compile Include="TransportRouting.fs" />
     <Compile Include="Economy.fs" />

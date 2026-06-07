@@ -168,8 +168,8 @@ let formatTransportPurpose purpose =
 
 let formatAction (world: World) action =
     match action with
-    | PayBillAction amount -> sprintf "pay bill %.0f" (float amount)
-    | DelayBillAction amount -> sprintf "delay bill %.0f" (float amount)
+    | PayBillAction charge -> sprintf "pay bill %.0f" (float charge.Amount)
+    | DelayBillAction charge -> sprintf "delay bill %.0f" (float charge.Amount)
     | GoToWorkAction placeId -> $"go to work at {placeName world placeId}"
     | SkipWorkAction -> "skip work"
     | AttendSchoolAction placeId -> $"attend {placeName world placeId}"
@@ -279,9 +279,9 @@ let formatEvent (world: World) event =
         let source = employer |> Option.map (institutionName world) |> Option.defaultValue "an employer"
         $"{simName world simId} lost a job with {source}"
     | RentIncreased(_, householdId, oldRent, newRent) -> sprintf "%s rent rose from %.0f to %.0f" (householdName world householdId) (float oldRent) (float newRent)
-    | BillDue(_, householdId, amount) -> sprintf "%s received a bill for %.0f" (householdName world householdId) (float amount)
-    | BillPaid(_, householdId, amount) -> sprintf "%s paid %.0f" (householdName world householdId) (float amount)
-    | BillMissed(_, householdId, amount) -> sprintf "%s missed %.0f" (householdName world householdId) (float amount)
+    | BillDue(_, householdId, _, amount) -> sprintf "%s received a bill for %.0f" (householdName world householdId) (float amount)
+    | BillPaid(_, householdId, _, amount, _) -> sprintf "%s paid %.0f" (householdName world householdId) (float amount)
+    | BillMissed(_, householdId, _, amount) -> sprintf "%s missed %.0f" (householdName world householdId) (float amount)
     | EvictionFiled(_, householdId, _) -> $"{householdName world householdId} had an eviction filed"
     | EvictionCompleted(_, householdId, _) -> $"{householdName world householdId} was evicted"
     | IllnessOccurred(_, simId) -> $"{simName world simId} got sick"

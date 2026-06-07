@@ -347,8 +347,7 @@ module LifeSim =
                 |> (*) 0.01
 
             { household with
-                Cleanliness = clamp01 (household.Cleanliness + cleaningDelta - repairDrag)
-                BillsDue = household.BillsDue + household.LotValue * 0.00003m * decimal hours })
+                Cleanliness = clamp01 (household.Cleanliness + cleaningDelta - repairDrag) })
 
     let tickSim minutes (households: Map<HouseholdId, Household>) (allSims: Map<SimId, Sim>) (sim: Sim) =
         let household = Map.tryFind sim.Household households

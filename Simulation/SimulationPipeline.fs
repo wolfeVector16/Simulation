@@ -28,8 +28,8 @@ module SimulationPipeline =
         let idStr = id.ToString("N")
         $"household:%s{idStr}"
 
-    let private isMonthlyRentMoment world =
-        world.Day % 30 = 5 && world.MinuteOfDay = 6 * 60
+    let isWeeklyBillingTime world =
+        HouseholdEconomy.isWeeklyBillingTime world
 
     let private relationshipDimensionsDefault =
         { Affection = 0.0
@@ -259,13 +259,24 @@ module SimulationPipeline =
           TravelTimeCache = world.Runtime.TravelTimeCache
           CacheVersion = world.Runtime.CacheVersion }
 
-    let private monthlySystemEvents world =
-        if isMonthlyRentMoment world then
+    let generateWeeklyBillingEvents world =
+        if isWeeklyBillingTime world then
+            let cycle = HouseholdEconomy.billingCycle world
+
             world.Households
             |> Map.toSeq
-            |> Seq.choose (fun (householdId, household) ->
-                household.RentMonthly
-                |> Option.map (fun rent -> BillDue(eventId world.Meta.Seed world.Meta.Tick "rent-due" (householdId.GetHashCode()), householdId, rent)))
+            |> Seq.collect (fun (householdId, household) ->
+                if household.LastBilledWeek = Some cycle then
+                    []
+                else
+                    let index = householdId.GetHashCode()
+                    let previousUnpaid = HouseholdEconomy.normalizeBillsDue household.BillsDue
+                    let charges = HouseholdEconomy.calculateWeeklyHouseholdCharges world household
+
+                    [ for chargeIndex, charge in charges |> List.indexed do
+                          BillDue(eventId world.Meta.Seed world.Meta.Tick "weekly-bill-due" (index + chargeIndex), householdId, charge.Kind, charge.Amount)
+                      if previousUnpaid > 0m then
+                          BillMissed(eventId world.Meta.Seed world.Meta.Tick "weekly-bill-missed" index, householdId, LegacyBill, previousUnpaid) ])
             |> Seq.toList
         else
             []
@@ -299,26 +310,32 @@ module SimulationPipeline =
             world.Transport.RecentEvents
             |> List.mapi (fun index event -> TransportEventOccurred(eventId world.Meta.Seed world.Meta.Tick "transport" index, event))
 
-        monthlySystemEvents world @ attendanceEvents world @ transportEvents
+        generateWeeklyBillingEvents world @ attendanceEvents world @ transportEvents
 
-    let private householdIntent world index householdId household =
+    let private householdIntents world billedThisTick index householdId household =
         let boundedAlternatives =
-            [ household.RentMonthly |> Option.map DelayBillAction
-              household.RentMonthly |> Option.map PayBillAction
+            [ Some NoOpAction
+              household.RentMonthly
+              |> Option.map (fun rent -> DelayBillAction { Kind = RentBill None; Amount = HouseholdEconomy.boundedWeeklyBill (rent / 4m) })
+              household.RentMonthly
+              |> Option.map (fun rent -> PayBillAction { Kind = RentBill None; Amount = HouseholdEconomy.boundedWeeklyBill (rent / 4m) })
               Some NoOpAction ]
             |> List.choose id
             |> List.truncate 3
 
-        if household.BillsDue > 0m && world.MinuteOfDay % 60 = 0 then
-            let canPay = household.Funds >= household.BillsDue
-            let action = if canPay then PayBillAction household.BillsDue else DelayBillAction household.BillsDue
-            let reasons =
-                [ FinancialPressure
-                  if not canPay then HousingInstability
-                  if household.Stability < 0.45 then FearOfConsequence ]
+        if Set.contains householdId billedThisTick && household.BillsDue > 0m then
+            HouseholdEconomy.calculateWeeklyHouseholdCharges world household
+            |> List.indexed
+            |> List.map (fun (chargeIndex, charge) ->
+                let charge = { charge with Amount = min charge.Amount (HouseholdEconomy.normalizeBillsDue household.BillsDue) }
+                let canPay = household.Funds >= charge.Amount
+                let action = if canPay then PayBillAction charge else DelayBillAction charge
+                let reasons =
+                    [ FinancialPressure
+                      if not canPay then HousingInstability
+                      if household.Stability < 0.45 then FearOfConsequence ]
 
-            Some
-                { Id = intentId world.Meta.Seed world.Meta.Tick "household-bill" index
+                { Id = intentId world.Meta.Seed world.Meta.Tick "household-bill" (index * 100 + chargeIndex)
                   PartitionKey = partitionForHousehold householdId
                   Decision =
                     { Actor = None
@@ -328,38 +345,38 @@ module SimulationPipeline =
                       Reasons = reasons
                       ExpectedConsequences =
                         if canPay then
-                            [ "Household funds fall, but housing stability improves." ]
+                            [ "Household funds fall, and the bill payment reaches its recipient." ]
                         else
-                            [ "Unpaid bills increase instability and may become eviction pressure." ]
+                            [ "Unpaid bills remain until the next weekly billing cycle." ]
                       Confidence = if canPay then 0.86 else 0.62
                       Urgency = 0.90
                       TimeCostMinutes = 10
-                      MoneyCost = if canPay then household.BillsDue else 0m
+                      MoneyCost = if canPay then charge.Amount else 0m
                       SocialCost = if canPay then 0.05 else 0.25
-                      Risk = if canPay then 0.08 else 0.55 } }
+                      Risk = if canPay then 0.08 else 0.55 } })
         else
-            None
+            []
 
-    let private generateIntents world =
+    let private generateIntents world billedThisTick =
         world.Households
         |> Map.toSeq
         |> Seq.sortBy (fun (HouseholdId id, _) -> id)
-        |> Seq.mapi (fun index (householdId, household) -> householdIntent world index householdId household)
-        |> Seq.choose id
+        |> Seq.mapi (fun index (householdId, household) -> householdIntents world billedThisTick index householdId household)
+        |> Seq.collect id
         |> Seq.toList
 
     let private resolveIntents intents =
         intents
         |> List.sortBy (fun intent -> intent.PartitionKey, intent.Id)
-        |> List.distinctBy (fun intent -> intent.Decision.Household, intent.Decision.Actor)
+        |> List.distinctBy (fun intent -> intent.Decision.Household, intent.Decision.Actor, intent.Decision.ChosenAction)
 
     let private eventsFromIntent world index intent =
         match intent.Decision.Household, intent.Decision.ChosenAction with
-        | Some householdId, PayBillAction amount ->
-            [ BillPaid(eventId world.Meta.Seed world.Meta.Tick "bill-paid" index, householdId, amount)
-              HouseholdBudgetChanged(eventId world.Meta.Seed world.Meta.Tick "budget-paid" index, householdId, -amount) ]
-        | Some householdId, DelayBillAction amount ->
-            [ BillMissed(eventId world.Meta.Seed world.Meta.Tick "bill-missed" index, householdId, amount) ]
+        | Some householdId, PayBillAction charge ->
+            let recipient = HouseholdEconomy.billRecipient world householdId charge.Kind
+            [ BillPaid(eventId world.Meta.Seed world.Meta.Tick "bill-paid" index, householdId, charge.Kind, charge.Amount, recipient)
+              HouseholdBudgetChanged(eventId world.Meta.Seed world.Meta.Tick "budget-paid" index, householdId, -charge.Amount) ]
+        | Some _, DelayBillAction _ -> []
         | _ -> []
 
     let private eventIdOf event =
@@ -368,9 +385,9 @@ module SimulationPipeline =
         | JobStarted(id, _, _)
         | JobLost(id, _, _)
         | RentIncreased(id, _, _, _)
-        | BillDue(id, _, _)
-        | BillPaid(id, _, _)
-        | BillMissed(id, _, _)
+        | BillDue(id, _, _, _)
+        | BillPaid(id, _, _, _, _)
+        | BillMissed(id, _, _, _)
         | EvictionFiled(id, _, _)
         | EvictionCompleted(id, _, _)
         | IllnessOccurred(id, _)
@@ -490,10 +507,10 @@ module SimulationPipeline =
               DecayPerDay = if salience = Traumatic || salience = Formative then 0.002 else 0.020 }
 
         match event with
-        | BillMissed(_, householdId, _) ->
+        | BillMissed(_, householdId, _, _) ->
             let people = world.Meta.Indexes.PersonIdsByHousehold |> Map.tryFind householdId |> Option.defaultValue []
             Some(baseMemory Important 0.65 [ "bill"; "financial-stress" ] people [] None [ AffectsFear; AffectsAvoidance ])
-        | BillPaid(_, householdId, _) ->
+        | BillPaid(_, householdId, _, _, _) ->
             let people = world.Meta.Indexes.PersonIdsByHousehold |> Map.tryFind householdId |> Option.defaultValue []
             Some(baseMemory Notable 0.25 [ "bill"; "stability" ] people [] None [ AffectsTrust None ])
         | RentIncreased(_, householdId, _, _) ->
@@ -567,6 +584,50 @@ module SimulationPipeline =
                         Budget =
                             { world.City.Budget with
                                 Treasury = world.City.Budget.Treasury - cost } } }
+
+    let private creditCityRevenue amount world =
+        if amount <= 0m then
+            world
+        else
+            { world with
+                City =
+                    { world.City with
+                        Budget =
+                            { world.City.Budget with
+                                Treasury = world.City.Budget.Treasury + amount
+                                MonthlyIncome = world.City.Budget.MonthlyIncome + amount } } }
+
+    let private creditInstitution institutionId amount (world: World) =
+        if amount <= 0m then
+            world
+        else
+            // Institutions currently expose Funding rather than revenue/cash; receipts are tracked there until institution budgets are richer.
+            { world with
+                Institutions =
+                    world.Institutions
+                    |> Map.change institutionId (Option.map (fun (institution: Institution) -> { institution with Funding = institution.Funding + amount })) }
+
+    let private creditExternalSector recipient amount world =
+        if amount <= 0m then
+            world
+        else
+            match recipient with
+            | ExternalFinanceSector ->
+                { world with ExternalLedger = { world.ExternalLedger with FinanceOutflow = world.ExternalLedger.FinanceOutflow + amount } }
+            | ExternalPrivateSector ->
+                { world with ExternalLedger = { world.ExternalLedger with PrivateSectorOutflow = world.ExternalLedger.PrivateSectorOutflow + amount } }
+            | ExternalServiceSector ->
+                { world with ExternalLedger = { world.ExternalLedger with ServiceSectorOutflow = world.ExternalLedger.ServiceSectorOutflow + amount } }
+            | _ -> world
+
+    let private routeBillPayment recipient amount world =
+        match recipient with
+        | CityRecipient -> creditCityRevenue amount world
+        | InstitutionRecipient institutionId
+        | LandlordRecipient institutionId -> creditInstitution institutionId amount world
+        | ExternalFinanceSector
+        | ExternalPrivateSector
+        | ExternalServiceSector -> creditExternalSector recipient amount world
 
     let private addStreetEventId eventId world =
         { world with
@@ -991,38 +1052,71 @@ module SimulationPipeline =
                         Intersections = intersections
                         SegmentCongestion = world.Transport.SegmentCongestion |> Map.remove roadSegmentId } }
             |> invalidateTransportCaches
-        | BillDue(_, householdId, amount) ->
-            { world with
-                Households =
-                    world.Households
-                    |> Map.change householdId (Option.map (fun household -> { household with BillsDue = household.BillsDue + amount })) }
-        | BillPaid(_, householdId, amount) ->
+        | BillDue(_, householdId, _, amount) ->
             { world with
                 Households =
                     world.Households
                     |> Map.change householdId (Option.map (fun household ->
+                        let amount = HouseholdEconomy.boundedWeeklyBill amount
+                        let cycle = HouseholdEconomy.billingCycle world
+                        let lastBilledWeek = if isWeeklyBillingTime world then Some cycle else household.LastBilledWeek
+
                         { household with
-                            Funds = household.Funds - amount
-                            BillsDue = max 0m (household.BillsDue - amount)
+                            BillsDue = HouseholdEconomy.normalizeBillsDue (HouseholdEconomy.normalizeBillsDue household.BillsDue + amount)
+                            LastBilledWeek = lastBilledWeek })) }
+        | BillPaid(_, householdId, _, amount, recipient) ->
+            let payment =
+                world.Households
+                |> Map.tryFind householdId
+                |> Option.map (fun household ->
+                    let due = HouseholdEconomy.normalizeBillsDue household.BillsDue
+                    let availableFunds = HouseholdEconomy.clampMoney 0m HouseholdEconomy.maxReasonableHouseholdFunds household.Funds
+                    amount |> max 0m |> min due |> min availableFunds)
+                |> Option.defaultValue 0m
+
+            { world with
+                Households =
+                    world.Households
+                    |> Map.change householdId (Option.map (fun household ->
+                        let due = HouseholdEconomy.normalizeBillsDue household.BillsDue
+                        let availableFunds = HouseholdEconomy.clampMoney 0m HouseholdEconomy.maxReasonableHouseholdFunds household.Funds
+
+                        { household with
+                            Funds = HouseholdEconomy.clampMoney 0m HouseholdEconomy.maxReasonableHouseholdFunds (availableFunds - payment)
+                            BillsDue = HouseholdEconomy.normalizeBillsDue (due - payment)
                             Stability = clamp01 (household.Stability + 0.04) })) }
-        | BillMissed(_, householdId, amount) ->
+            |> routeBillPayment recipient payment
+        | BillMissed(_, householdId, _, amount) ->
             { world with
                 Households =
                     world.Households
                     |> Map.change householdId (Option.map (fun household ->
+                        let due = HouseholdEconomy.normalizeBillsDue household.BillsDue
+                        let lateFee = HouseholdEconomy.lateFeeForPreviousBalance amount
+
                         { household with
-                            BillsDue = household.BillsDue + amount * 0.05m
+                            BillsDue = HouseholdEconomy.normalizeBillsDue (due + lateFee)
                             Stability = clamp01 (household.Stability - 0.12)
                             ConflictLevel = clamp01 (household.ConflictLevel + 0.07) })) }
         | HouseholdBudgetChanged(_, _, _) -> world
-        | RentIncreased(_, householdId, _, newRent) ->
+        | RentIncreased(_, householdId, oldRent, newRent) ->
             { world with
                 Households =
                     world.Households
                     |> Map.change householdId (Option.map (fun household ->
+                        let previousRent =
+                            household.RentMonthly
+                            |> Option.defaultValue oldRent
+                            |> HouseholdEconomy.clampMoney 0m HouseholdEconomy.maxReasonableRent
+
+                        let newRent = HouseholdEconomy.clampMoney 0m HouseholdEconomy.maxReasonableRent newRent
+                        let monthlyExpenses =
+                            household.MonthlyExpenses - previousRent + newRent
+                            |> HouseholdEconomy.clampMoney 0m HouseholdEconomy.maxReasonableMonthlyExpense
+
                         { household with
                             RentMonthly = Some newRent
-                            MonthlyExpenses = household.MonthlyExpenses + newRent
+                            MonthlyExpenses = monthlyExpenses
                             Stability = clamp01 (household.Stability - 0.08) })) }
         | SchoolDayCompleted(_, simId, _) ->
             { world with
@@ -1150,9 +1244,16 @@ module SimulationPipeline =
                 Runtime = runtime }
 
         let systemEvents = generateSystemEvents world
+        let billedThisTick =
+            systemEvents
+            |> List.choose (function
+                | BillDue(_, householdId, _, _) -> Some householdId
+                | _ -> None)
+            |> Set.ofList
+
         let world = { world with Transport = { world.Transport with RecentEvents = [] } }
         let world = (world, systemEvents) ||> List.fold (fun world event -> applyEventAndRemember event world)
-        let intents = generateIntents world
+        let intents = generateIntents world billedThisTick
         let resolved = resolveIntents intents
         let intentEvents = resolved |> List.mapi (eventsFromIntent world) |> List.concat
         let events = systemEvents @ intentEvents

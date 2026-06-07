@@ -48,8 +48,8 @@ type DecisionReason =
     | EmergencyPriority
     | FreightRestriction
 type AgentAction =
-    | PayBillAction of amount: decimal
-    | DelayBillAction of amount: decimal
+    | PayBillAction of charge: BillCharge
+    | DelayBillAction of charge: BillCharge
     | GoToWorkAction of PlaceId
     | SkipWorkAction
     | AttendSchoolAction of PlaceId

@@ -21,11 +21,12 @@ module EventSystemTests =
         Invariants.checkWorld next |> ignore
 
     [<Fact>]
-    let ``InsufficientHouseholdFundsMissesBillWithReasons`` () =
+    let ``InsufficientHouseholdFundsDelaysWeeklyBillWithReasons`` () =
         let initial = TestWorld.create ()
         let world =
             { initial with
-                MinuteOfDay = 7 * 60
+                Day = 7
+                MinuteOfDay = 9 * 60
                 Households =
                     initial.Households
                     |> Map.map (fun _ household ->
@@ -36,14 +37,16 @@ module EventSystemTests =
 
         let next = SimulationPipeline.tick world
 
-        Assert.Contains(next.Meta.EventLog, function BillMissed _ -> true | _ -> false)
+        Assert.Contains(next.Meta.EventLog, function BillDue _ -> true | _ -> false)
         Assert.Contains(next.Meta.Decisions, fun decision ->
-            decision.ChosenAction = DelayBillAction 100m
+            match decision.ChosenAction with
+            | DelayBillAction charge -> charge.Amount > 100m
+            | _ -> false
             && List.contains FinancialPressure decision.Reasons
             && List.contains HousingInstability decision.Reasons)
 
         next.Households
-        |> Map.iter (fun _ household -> Assert.True(household.Stability < 0.40 || household.BillsDue > 100m))
+        |> Map.iter (fun _ household -> Assert.True(household.BillsDue > 100m))
 
         Invariants.checkWorld next |> ignore
 
