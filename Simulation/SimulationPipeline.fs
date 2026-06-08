@@ -390,6 +390,8 @@ module SimulationPipeline =
         | BillMissed(id, _, _, _)
         | EvictionFiled(id, _, _)
         | EvictionCompleted(id, _, _)
+        | HouseholdCreated(id, _, _)
+        | HouseholdMovedIn(id, _, _)
         | IllnessOccurred(id, _)
         | RelationshipChanged(id, _, _)
         | ConflictOccurred(id, _, _, _)
@@ -1022,6 +1024,21 @@ module SimulationPipeline =
                         Lanes =
                             (world.Transport.Lanes, lanes)
                             ||> List.fold (fun lanes lane -> Map.add lane.Id lane lanes)
+                        LaneOccupancies =
+                            (world.Transport.LaneOccupancies, lanes)
+                            ||> List.fold (fun occupancies lane ->
+                                Map.add lane.Id
+                                    { LaneId = lane.Id
+                                      MovementIds = []
+                                      VehicleCount = 0
+                                      PedestrianCount = 0
+                                      CyclistCount = 0
+                                      Density = 0.0
+                                      QueueLength = 0
+                                      AverageSpeedKph = lane.CurrentSpeedKph
+                                      IsBlocked = lane.Blocked
+                                      Spillback = false }
+                                    occupancies)
                         SegmentCongestion = Map.add segment.Id 0.0 world.Transport.SegmentCongestion } }
             |> chargeCityBudget cost
             |> invalidateTransportCaches
@@ -1049,7 +1066,11 @@ module SimulationPipeline =
                 Transport =
                     { world.Transport with
                         Lanes = world.Transport.Lanes |> Map.filter (fun laneId _ -> not (Set.contains laneId removedLaneIds))
+                        LaneOccupancies = world.Transport.LaneOccupancies |> Map.filter (fun laneId _ -> not (Set.contains laneId removedLaneIds))
                         Intersections = intersections
+                        SignalPhaseStates = world.Transport.SignalPhaseStates |> Map.filter (fun nodeId _ -> Map.containsKey nodeId intersections)
+                        PedestrianSegmentOccupancy = world.Transport.PedestrianSegmentOccupancy |> Map.remove roadSegmentId
+                        BikeSegmentOccupancy = world.Transport.BikeSegmentOccupancy |> Map.remove roadSegmentId
                         SegmentCongestion = world.Transport.SegmentCongestion |> Map.remove roadSegmentId } }
             |> invalidateTransportCaches
         | BillDue(_, householdId, _, amount) ->

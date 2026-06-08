@@ -240,6 +240,7 @@ let formatTransportEvent (world: World) event =
     | MovementFailed(_, tripId) -> $"movement failed for {tripId}"
     | LaneChanged(_, _, _) -> "lane changed"
     | LaneChangeFailed(_, _, _) -> "lane change failed"
+    | LaneChangeRequested(_, _, _, reason) -> $"lane change requested ({reason})"
     | ExitMissed(_, nodeId) -> $"exit missed at {nodeId}"
     | RouteReplanned tripId -> $"route replanned for {tripId}"
     | TripDelayed(tripId, delay) -> $"trip delayed {delay}m ({tripId})"
@@ -257,6 +258,18 @@ let formatTransportEvent (world: World) event =
     | CrashOccurred segmentId -> $"crash on {segmentId}"
     | RoadBlocked segmentId -> $"road blocked {segmentId}"
     | SignalFailed nodeId -> $"signal failed at {nodeId}"
+    | VehicleQueued(_, laneId) -> $"vehicle queued on {laneId}"
+    | VehicleDequeued(_, laneId) -> $"vehicle dequeued from {laneId}"
+    | MergeBlocked(_, laneId) -> $"merge blocked into {laneId}"
+    | MergeCompleted(_, laneId) -> $"merge completed into {laneId}"
+    | SignalPhaseChanged(nodeId, phaseIndex) -> $"signal phase changed at {nodeId} to {phaseIndex}"
+    | IntersectionMovementServed(_, nodeId) -> $"intersection movement served at {nodeId}"
+    | QueueSpillbackStarted laneId -> $"queue spillback started on {laneId}"
+    | QueueSpillbackEnded laneId -> $"queue spillback ended on {laneId}"
+    | DownstreamBlocked laneId -> $"downstream blocked from {laneId}"
+    | RerouteRequested(_, nodeId) -> $"reroute requested at {nodeId}"
+    | PedestrianCrossingStarted(_, nodeId) -> $"pedestrian crossing started at {nodeId}"
+    | PedestrianCrossingEnded(_, nodeId) -> $"pedestrian crossing ended at {nodeId}"
     | ConstructionStarted segmentId -> $"construction started on {segmentId}"
     | ConstructionEnded segmentId -> $"construction ended on {segmentId}"
     | EmergencyResponseDelayed(institutionId, delay) -> $"{institutionName world institutionId} response delayed {delay}m"
@@ -718,12 +731,16 @@ let rec runSnapshots tickMinutes remaining world =
 type RunnerOptions =
     { Seed: int
       Snapshots: int
-      TickMinutes: int }
+      TickMinutes: int
+      Days: int
+      TraceCollapse: bool }
 
 let defaultOptions =
     { Seed = 1337
       Snapshots = 18
-      TickMinutes = 15 }
+      TickMinutes = 15
+      Days = 30
+      TraceCollapse = false }
 
 let private parseInt (optionName: string) (value: string) (fallback: int) =
     match System.Int32.TryParse value with
@@ -742,6 +759,12 @@ let parseArgs (argv: string array) =
             loop { options with Snapshots = parseInt "--snapshots" value options.Snapshots } rest
         | "--tick-minutes" :: value :: rest ->
             loop { options with TickMinutes = parseInt "--tick-minutes" value options.TickMinutes } rest
+        | "--days" :: value :: rest ->
+            loop { options with Days = parseInt "--days" value options.Days } rest
+        | "--scenario" :: _ :: rest ->
+            loop options rest
+        | "--trace-collapse" :: rest ->
+            loop { options with TraceCollapse = true } rest
         | unknown :: rest ->
             printfn "Ignoring unknown argument '%s'." unknown
             loop options rest
@@ -756,17 +779,24 @@ let main argv =
     printfn "RealSim Juniper scenario"
     printfn "  seed=%i snapshots=%i tickMinutes=%i" options.Seed options.Snapshots options.TickMinutes
 
-    printWorldGenerationDashboard world
-    printCityDashboard world
-    printLifeDashboard world
-    printTransportDashboard world
-    printCausalityDashboard world
-    printRoutePreview world
-    printEconomyPreview world
+    if options.TraceCollapse then
+        let ticks = max 1 ((options.Days * minutesPerDay) / max 1 options.TickMinutes)
+        let trace = Simulation.CollapseDiagnostics.run options.TickMinutes ticks world
+        printfn "%s" trace.Report
+        0
+    else
 
-    let finalWorld = runSnapshots options.TickMinutes options.Snapshots world
+        printWorldGenerationDashboard world
+        printCityDashboard world
+        printLifeDashboard world
+        printTransportDashboard world
+        printCausalityDashboard world
+        printRoutePreview world
+        printEconomyPreview world
 
-    printfn ""
-    printfn "Simulation complete."
-    printfn "  finalDay=%i finalTime=%s events=%i memories=%i" finalWorld.Day (formatTime finalWorld.MinuteOfDay) finalWorld.Meta.EventLog.Length finalWorld.Memories.Count
-    0
+        let finalWorld = runSnapshots options.TickMinutes options.Snapshots world
+
+        printfn ""
+        printfn "Simulation complete."
+        printfn "  finalDay=%i finalTime=%s events=%i memories=%i" finalWorld.Day (formatTime finalWorld.MinuteOfDay) finalWorld.Meta.EventLog.Length finalWorld.Memories.Count
+        0

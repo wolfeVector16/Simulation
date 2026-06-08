@@ -161,29 +161,35 @@ public static class MapProjection
 
     private static IEnumerable<MapPrimitive> ProjectParcels(SimDomain.World world, Func<SimDomain.Coordinates, MapPoint> project)
     {
+        var industrialSites = FSharpInterop.Pairs(world.City.IndustrialSites).ToDictionary(item => item.Key, item => item.Value);
+
         foreach (var item in FSharpInterop.Pairs(world.City.Parcels).OrderBy(item => item.Key.ToString()))
         {
             var parcel = item.Value;
             var center = OffsetForId(project(parcel.Position), item.Key.ToString(), 3.2);
             var building = parcel.Building?.Value;
             var hasBuilding = building is not null;
-            var size = hasBuilding ? BuildingSize(building!.Use.ToString(), parcel.Density.ToString()) : 10.0;
-            var category = hasBuilding ? building!.Use.ToString() : parcel.Zone.ToString();
+            industrialSites.TryGetValue(item.Key, out var industrialSite);
+            var useKey = industrialSite is not null ? IndustrialProjectionCategory(industrialSite) : building?.Use.ToString() ?? parcel.Zone.ToString();
+            var size = hasBuilding ? BuildingSize(useKey, parcel.Density.ToString()) : 10.0;
+            var category = hasBuilding ? useKey : parcel.Zone.ToString();
+            var symbol = hasBuilding ? BuildingSymbol(useKey) : MapSymbol.Square;
+            var details = hasBuilding
+                ? BuildingDetails(building!, parcel, industrialSite)
+                : $"vacant parcel, zone={Readable(parcel.Zone.ToString())}, density={Readable(parcel.Density.ToString())}, land={parcel.LandValue:0.00}, road={parcel.RoadConnected}";
 
             yield return new MapPrimitive(
                 Id: item.Key.ToString(),
                 Kind: hasBuilding ? MapPrimitiveKind.Building : MapPrimitiveKind.Parcel,
                 Name: building?.Name ?? parcel.Name,
-                Points: BuildingShape(center, size, size, hasBuilding ? BuildingSymbol(building!.Use.ToString()) : MapSymbol.Square),
-                Fill: hasBuilding ? BuildingFill(building!.Use.ToString(), building.Status.ToString()) : "#00000000",
-                Stroke: hasBuilding ? BuildingStroke(building!.Use.ToString()) : "#91A58E",
+                Points: BuildingShape(center, size, size, symbol),
+                Fill: hasBuilding ? BuildingFill(useKey, building!.Status.ToString()) : "#00000000",
+                Stroke: hasBuilding ? BuildingStroke(useKey) : "#91A58E",
                 Thickness: hasBuilding ? 0.8 : 0.4,
                 Radius: 0.0,
-                Details: hasBuilding
-                    ? $"use={Readable(building!.Use.ToString())}, status={Readable(building.Status.ToString())}, capacity={building.Capacity}, occupants={building.Occupants}, jobs={building.Jobs}, parcel={parcel.Name}, zone={Readable(parcel.Zone.ToString())}, condition powered={parcel.Powered}, watered={parcel.Watered}, road={parcel.RoadConnected}"
-                    : $"vacant parcel, zone={Readable(parcel.Zone.ToString())}, density={Readable(parcel.Density.ToString())}, land={parcel.LandValue:0.00}, road={parcel.RoadConnected}",
+                Details: details,
                 Category: category,
-                Symbol: hasBuilding ? BuildingSymbol(building!.Use.ToString()) : MapSymbol.Square,
+                Symbol: symbol,
                 LineStyle: hasBuilding ? MapLineStyle.Solid : MapLineStyle.Dotted,
                 LabelMinZoom: hasBuilding ? 1.65 : 2.6,
                 LabelPriority: 70);
@@ -1059,6 +1065,16 @@ public static class MapProjection
             "Housing" => "#8ECAE6",
             "Commerce" => "#FFD166",
             "Industry" => "#B08968",
+            "Warehouse/logistics" => "#B8A070",
+            "Workshop/light production" => "#C9A227",
+            "Light manufacturing" => "#A7C957",
+            "Clean/flex industrial" => "#80CED7",
+            "Industrial yard" => "#A98467",
+            "Heavy industry" => "#7F5539",
+            "Hazardous industry" => "#8D0801",
+            "Extractive industry" => "#6F4E37",
+            "Waste management" => "#6B705C",
+            "Utility/power" => "#577590",
             "PublicService" => "#90DBF4",
             "Recreation" => "#95D5B2",
             _ => "#D0D5DD"
@@ -1072,6 +1088,16 @@ public static class MapProjection
             "Housing" => "#1F5F7A",
             "Commerce" => "#8A5A00",
             "Industry" => "#5D4037",
+            "Warehouse/logistics" => "#6C584C",
+            "Workshop/light production" => "#7A5C00",
+            "Light manufacturing" => "#386641",
+            "Clean/flex industrial" => "#006D77",
+            "Industrial yard" => "#5D4037",
+            "Heavy industry" => "#3E2723",
+            "Hazardous industry" => "#3D0000",
+            "Extractive industry" => "#2F2118",
+            "Waste management" => "#343A40",
+            "Utility/power" => "#1D3557",
             "PublicService" => "#0B4F6C",
             "Recreation" => "#2D6A4F",
             _ => "#303030"
@@ -1085,6 +1111,16 @@ public static class MapProjection
             "Housing" => 12.0,
             "Commerce" => 15.0,
             "Industry" => 20.0,
+            "Warehouse/logistics" => 23.0,
+            "Workshop/light production" => 14.0,
+            "Light manufacturing" => 18.0,
+            "Clean/flex industrial" => 17.0,
+            "Industrial yard" => 19.0,
+            "Heavy industry" => 22.0,
+            "Hazardous industry" => 22.0,
+            "Extractive industry" => 24.0,
+            "Waste management" => 21.0,
+            "Utility/power" => 19.0,
             "PublicService" => 16.0,
             "Recreation" => 14.0,
             _ => 12.0
@@ -1105,10 +1141,86 @@ public static class MapProjection
             "Housing" => MapSymbol.House,
             "Commerce" => MapSymbol.Storefront,
             "Industry" => MapSymbol.Warehouse,
+            "Warehouse/logistics" => MapSymbol.Warehouse,
+            "Workshop/light production" => MapSymbol.Storefront,
+            "Light manufacturing" => MapSymbol.Warehouse,
+            "Clean/flex industrial" => MapSymbol.Civic,
+            "Industrial yard" => MapSymbol.Square,
+            "Heavy industry" => MapSymbol.Warehouse,
+            "Hazardous industry" => MapSymbol.Warning,
+            "Extractive industry" => MapSymbol.Diamond,
+            "Waste management" => MapSymbol.Warning,
+            "Utility/power" => MapSymbol.Utility,
             "PublicService" => MapSymbol.Civic,
             "Recreation" => MapSymbol.Tree,
             _ => MapSymbol.Square
         };
+    }
+
+    private static string IndustrialProjectionCategory(SimDomain.IndustrialSite site)
+    {
+        var use = site.Use.ToString();
+
+        if (use is "Warehouse" or "DistributionCenter" or "LastMileLogistics")
+        {
+            return "Warehouse/logistics";
+        }
+
+        if (use is "Workshop" or "MakerSpace" or "AutoRepair")
+        {
+            return "Workshop/light production";
+        }
+
+        if (use is "LightManufacturing" or "FoodProduction")
+        {
+            return "Light manufacturing";
+        }
+
+        if (use is "CleanManufacturing" or "ResearchAndDevelopmentFlex")
+        {
+            return "Clean/flex industrial";
+        }
+
+        if (use is "EquipmentYard" or "ContractorYard" or "StorageYard")
+        {
+            return "Industrial yard";
+        }
+
+        if (use is "ChemicalPlant" or "Refinery")
+        {
+            return "Hazardous industry";
+        }
+
+        if (use is "Mining" or "Quarry" or "CoalMine")
+        {
+            return "Extractive industry";
+        }
+
+        if (use is "Landfill" or "RecyclingCenter" or "WasteTransferStation")
+        {
+            return "Waste management";
+        }
+
+        if (use.StartsWith("PowerPlant", StringComparison.Ordinal))
+        {
+            return "Utility/power";
+        }
+
+        return "Heavy industry";
+    }
+
+    private static string BuildingDetails(SimDomain.Building building, SimDomain.Parcel parcel, SimDomain.IndustrialSite? industrialSite)
+    {
+        var baseDetails = $"use={Readable(building.Use.ToString())}, status={Readable(building.Status.ToString())}, capacity={building.Capacity}, occupants={building.Occupants}, jobs={building.Jobs}, parcel={parcel.Name}, zone={Readable(parcel.Zone.ToString())}, condition powered={parcel.Powered}, watered={parcel.Watered}, road={parcel.RoadConnected}";
+
+        if (industrialSite is null)
+        {
+            return baseDetails;
+        }
+
+        var e = industrialSite.Externalities;
+        var f = industrialSite.Freight;
+        return $"{baseDetails}, industrial subtype={Readable(industrialSite.Use.ToString())}, form={Readable(industrialSite.Form.ToString())}, air={e.AirPollution:0.00}, ground={e.GroundPollution:0.00}, noise={e.Noise:0.00}, truck traffic={e.TruckTraffic:0.00}, inbound trucks/day={f.InboundTruckTripsPerDay:0}, outbound trucks/day={f.OutboundTruckTripsPerDay:0}";
     }
 
     private static string PlaceFill(string kind)

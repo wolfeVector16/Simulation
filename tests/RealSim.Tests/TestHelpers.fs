@@ -157,6 +157,12 @@ module Invariants =
             | EvictionCompleted(_, householdId, unitId) ->
                 assertContains "Event references missing household." householdId world.Households
                 assertContains "Event references missing housing unit." unitId world.HousingUnits
+            | HouseholdCreated(_, householdId, simIds) ->
+                assertContains "Event references missing household." householdId world.Households
+                simIds |> List.iter (fun simId -> assertContains "Event references missing sim." simId world.Sims)
+            | HouseholdMovedIn(_, householdId, unitId) ->
+                assertContains "Event references missing household." householdId world.Households
+                assertContains "Event references missing housing unit." unitId world.HousingUnits
             | IllnessOccurred(_, simId)
             | ChildMissedSchool(_, simId, _)
             | SchoolDayCompleted(_, simId, _) ->

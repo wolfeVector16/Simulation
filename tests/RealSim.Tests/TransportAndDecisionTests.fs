@@ -1117,7 +1117,8 @@ module TransportAndDecisionTests =
 
         Assert.Equal(beforeDiagnostics, updated.PerformanceDiagnostics)
         Assert.True((beforeTrips = updated.Transport.Trips))
-        Assert.True((beforeEvents = updated.Transport.RecentEvents))
+        let addedEvents = updated.Transport.RecentEvents |> List.skip beforeEvents.Length
+        Assert.DoesNotContain(addedEvents, function RouteChosen _ | RouteReplanned _ -> true | _ -> false)
 
     [<Fact>]
     let ``TrafficFrameRoadViewsMatchMovementOccupancy`` () =

@@ -70,7 +70,7 @@ module Transport =
         | VehicleNotStarted -> MovementStatus.Planned
         | VehicleMoving -> MovementStatus.InProgress
         | VehicleWaitingAtIntersection -> MovementStatus.WaitingAtIntersection
-        | VehicleQueued -> MovementStatus.Queued
+        | VehicleStatus.VehicleQueued -> MovementStatus.Queued
         | VehicleParked
         | VehicleCompleted -> MovementStatus.Completed
         | VehicleCanceled -> MovementStatus.Canceled
@@ -606,7 +606,7 @@ module Transport =
                         { vehicle with
                             PreviousPosition = Some vehicle.CurrentPosition
                             CurrentSpeedKph = 0.0
-                            Status = VehicleQueued }
+                            Status = VehicleStatus.VehicleQueued }
                     else
                         let metersThisTick = speed * 1000.0 / 60.0 * float minutes
                         let nextProgress = progress + metersThisTick / length
@@ -939,7 +939,23 @@ module TrafficVisualization =
         | MovementStatus.Blocked, Some leg -> leg.ToRoadNode
         | _ -> None
 
-    let private movingEntityView (movement: MovementState) : MovingEntityView =
+    let private currentLaneId (world: World) (movement: MovementState) =
+        match vehicleIdOfKind movement.Kind with
+        | Some vehicleId ->
+            world.Transport.Vehicles
+            |> Map.tryFind vehicleId
+            |> Option.bind _.CurrentLane
+            |> Option.orElseWith (fun () -> currentLeg movement |> Option.bind (fun leg -> leg.LaneIds |> List.tryHead))
+        | None ->
+            currentLeg movement
+            |> Option.bind (fun leg -> leg.LaneIds |> List.tryHead)
+
+    let private vehicleStateForMovement (world: World) (movement: MovementState) =
+        vehicleIdOfKind movement.Kind
+        |> Option.bind (fun vehicleId -> world.Transport.Vehicles |> Map.tryFind vehicleId)
+
+    let private movingEntityView (world: World) (movement: MovementState) : MovingEntityView =
+        let vehicle = vehicleStateForMovement world movement
         { MovementId = movement.Id
           EntityKind = movement.Kind
           VehicleId = vehicleIdOfKind movement.Kind
@@ -951,6 +967,15 @@ module TrafficVisualization =
           HeadingRadians = movement.HeadingRadians
           SpeedKph = movement.CurrentSpeedKph
           Status = movement.Status
+          LaneId = currentLaneId world movement
+          DesiredLaneId = None
+          SegmentId = currentSegmentId movement
+          IntersectionId = currentIntersectionId movement
+          NextManeuver = vehicle |> Option.bind _.NextRequiredMovement
+          DistanceToManeuverMeters =
+            currentLeg movement
+            |> Option.map (fun leg -> max 0.0 (leg.DistanceMeters - movement.DistanceOnLegMeters))
+          DriverProfile = vehicle |> Option.map _.Driver
           Progress = movement.Progress
           DelaySeconds = movement.DelaySeconds
           RoutePreview = movement.Route.Geometry.Polyline }
@@ -967,7 +992,7 @@ module TrafficVisualization =
         world.Transport.Movements
         |> Map.tryFind movementId
         |> Option.filter isActiveMovement
-        |> Option.map movingEntityView
+        |> Option.map (fun movement -> movingEntityView world movement)
 
     let getVehicleView (world: World) (vehicleId: VehicleId) : VehicleView option =
         world.Transport.Movements
@@ -979,7 +1004,7 @@ module TrafficVisualization =
               TripId = Some movement.TripId
               Mode = movement.Route.Mode
               SegmentId = currentSegmentId movement
-              LaneId = movement.Route.Legs |> List.tryItem movement.CurrentLegIndex |> Option.bind (fun leg -> leg.LaneIds |> List.tryHead)
+              LaneId = currentLaneId world movement
               IntersectionId = currentIntersectionId movement
               Position = renderPosition movement.CurrentPosition
               PreviousPosition = movement.PreviousPosition |> Option.map renderPosition
@@ -995,17 +1020,17 @@ module TrafficVisualization =
               Occupancy = movement.Occupants })
 
     let private allMovingEntityViews (world: World) : MovingEntityView list =
-        allMovements world |> List.map movingEntityView
+        allMovements world |> List.map (movingEntityView world)
 
     let getVehiclesOnRoadSegment (world: World) segmentId : MovingEntityView list =
         allMovements world
         |> List.filter (fun movement -> currentSegmentId movement = Some segmentId && (vehicleIdOfKind movement.Kind).IsSome)
-        |> List.map movingEntityView
+        |> List.map (movingEntityView world)
 
     let getVehiclesAtIntersection (world: World) intersectionId : MovingEntityView list =
         allMovements world
         |> List.filter (fun movement -> currentIntersectionId movement = Some intersectionId && (vehicleIdOfKind movement.Kind).IsSome)
-        |> List.map movingEntityView
+        |> List.map (movingEntityView world)
 
     let private roadSegmentView (world: World) (movements: MovementState list) (segment: RoadSegment) : RoadSegmentTrafficView =
         let onSegment =
@@ -1073,7 +1098,22 @@ module TrafficVisualization =
               WaitingVehicleCount = waiting.Length
               AverageDelaySeconds = averageDelay
               ControlType = intersection.Control
-              CurrentPhase = if intersection.SignalPhases.IsEmpty then None else Some 0 }
+              CurrentPhase =
+                world.Transport.SignalPhaseStates
+                |> Map.tryFind nodeId
+                |> Option.map _.CurrentPhaseIndex
+                |> Option.orElse (if intersection.SignalPhases.IsEmpty then None else Some 0)
+              SecondsRemaining =
+                world.Transport.SignalPhaseStates
+                |> Map.tryFind nodeId
+                |> Option.map _.SecondsRemaining
+              QueueLength = waiting.Length
+              SpillbackBlocked =
+                intersection.IncomingLanes
+                |> Seq.exists (fun laneId ->
+                    world.Transport.LaneOccupancies
+                    |> Map.tryFind laneId
+                    |> Option.exists _.Spillback) }
 
         view
 
@@ -1096,7 +1136,7 @@ module TrafficVisualization =
 
     let getTrafficFrame (world: World) : TrafficFrame =
         let movements = allMovements world
-        let movingEntities = movements |> List.map movingEntityView
+        let movingEntities: MovingEntityView list = movements |> List.map (movingEntityView world)
         let vehicles = movingEntities |> List.filter (fun entity -> entity.VehicleId.IsSome)
         let pedestrians =
             movingEntities
@@ -1119,6 +1159,12 @@ module TrafficVisualization =
               Vehicles = vehicles
               Pedestrians = pedestrians
               TransitVehicles = transitVehicles
+              LaneOccupancies =
+                world.Transport.LaneOccupancies
+                |> Map.toSeq
+                |> Seq.sortBy fst
+                |> Seq.map snd
+                |> Seq.toList
               RoadSegmentTrafficViews =
                 world.Map.RoadSegments
                 |> List.sortBy _.Id
@@ -1129,6 +1175,13 @@ module TrafficVisualization =
                 |> Seq.sortBy fst
                 |> Seq.map (fun (nodeId, intersection) -> intersectionView world movements nodeId intersection)
                 |> Seq.toList
+              SignalPhaseStates =
+                world.Transport.SignalPhaseStates
+                |> Map.toSeq
+                |> Seq.sortBy fst
+                |> Seq.map snd
+                |> Seq.toList
+              RecentTrafficEvents = world.Transport.RecentEvents
               Events = []
               Metrics = frameMetrics world vehicles }
 

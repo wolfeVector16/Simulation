@@ -19,6 +19,13 @@ type UrbanArchetype =
     | StripMallArterial
     | DowntownCore
     | IndustrialWaterfront
+    | LightIndustrialCorridor
+    | ContractorYardCluster
+    | UrbanWorkshopDistrict
+    | CleanManufacturingCampus
+    | HeavyIndustrialWaterfront
+    | LogisticsPark
+    | WasteManagementEdge
     | TransitOrientedDistrict
     | RuralMainStreet
     | WarehouseDistrict

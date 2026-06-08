@@ -183,6 +183,31 @@ module Engine =
             { world with
                 Meta = { world.Meta with EventLog = (events @ world.Meta.EventLog) |> List.truncate 500 } }
 
+    let private logSystemEvents events world =
+        if List.isEmpty events then
+            world
+        else
+            { world with
+                Meta = { world.Meta with EventLog = (events @ world.Meta.EventLog) |> List.truncate 500 } }
+
+    let private buildingAbandonmentEvents tick beforeCity afterCity =
+        afterCity.Parcels
+        |> Map.toSeq
+        |> Seq.choose (fun (parcelId, afterParcel) ->
+            let beforeStatus =
+                beforeCity.Parcels
+                |> Map.tryFind parcelId
+                |> Option.bind _.Building
+                |> Option.map _.Status
+
+            let afterStatus = afterParcel.Building |> Option.map _.Status
+
+            match beforeStatus, afterStatus with
+            | Some beforeStatus, Some Abandoned when beforeStatus <> Abandoned ->
+                Some(BuildingAbandoned(deterministicEventId tick (20_000 + parcelId.GetHashCode()), SimulationSystemCommand DecaySystem, BuildingId parcelId))
+            | _ -> None)
+        |> Seq.toList
+
     let private createTickResult before after =
         let tick = TickId before.Meta.Tick
         let events = emittedEvents before after
@@ -204,6 +229,7 @@ module Engine =
         let nextDay = world.Day + (nextAbsoluteMinute / minutesPerDay)
         let cityMap = Economy.tickPlaces minutes world.Map
         let city = CitySystems.tick minutes world.City
+        let cityEvents = buildingAbandonmentEvents (TickId world.Meta.Tick) world.City city
 
         let cityMap, sims =
             ((cityMap, Map.empty), world.Sims |> Map.toSeq)
@@ -217,9 +243,14 @@ module Engine =
             Map = cityMap
             City = city
             Sims = sims }
+        |> logSystemEvents cityEvents
         |> Transport.tick minutes
         |> LifeSim.tick minutes
         |> SimulationPipeline.tick
+        |> fun world ->
+            let world, events = DevelopmentSystem.tick world
+            world |> logSystemEvents events
+        |> CityMetrics.updateIndicators
 
     let advanceTickWithAuthority authorityMode minutes (input: TickInput) world : World * TickResult =
         let snapshot = createSnapshot world

@@ -244,6 +244,41 @@ type VehicleStatus =
     | VehicleCompleted
     | VehicleCanceled
     | VehicleFailed
+type LaneChangeReason =
+    | PrepareForTurn
+    | PrepareForExit
+    | AvoidBlockedLane
+    | AvoidCongestion
+    | EnterBusLane
+    | LeaveRestrictedLane
+    | MergeRequired
+    | RerouteRecovery
+    | EmergencyPriority
+type LaneChangeProposal =
+    { MovementId: MovementId
+      FromLane: LaneId
+      ToLane: LaneId
+      Reason: LaneChangeReason
+      Urgency: float
+      SafetyScore: float
+      GapAcceptance: float
+      DriverProfile: DriverProfile }
+type LaneOccupancy =
+    { LaneId: LaneId
+      MovementIds: MovementId list
+      VehicleCount: int
+      PedestrianCount: int
+      CyclistCount: int
+      Density: float
+      QueueLength: int
+      AverageSpeedKph: float
+      IsBlocked: bool
+      Spillback: bool }
+type SignalPhaseState =
+    { IntersectionId: RoadNodeId
+      CurrentPhaseIndex: int
+      SecondsRemaining: int
+      CycleSeconds: int }
 type VehicleState =
     { Id: VehicleId
       Trip: TransportTripId
@@ -320,6 +355,7 @@ type TransportEvent =
     | TripCanceled of TransportTripId
     | TripCompleted of TransportTripId
     | ArrivedLate of SimId * TransportTripPurpose * delayMinutes: int
+    | LaneChangeRequested of MovementId * LaneId * LaneId * LaneChangeReason
     | MissedTransfer of TransportTripId * TransitStopId
     | TransitVehicleDelayed of TransitRouteId * delayMinutes: int
     | TransitVehicleCrowded of TransitRouteId
@@ -331,6 +367,18 @@ type TransportEvent =
     | CrashOccurred of RoadSegmentId
     | RoadBlocked of RoadSegmentId
     | SignalFailed of RoadNodeId
+    | VehicleQueued of MovementId * LaneId
+    | VehicleDequeued of MovementId * LaneId
+    | MergeBlocked of MovementId * LaneId
+    | MergeCompleted of MovementId * LaneId
+    | SignalPhaseChanged of RoadNodeId * phaseIndex: int
+    | IntersectionMovementServed of MovementId * RoadNodeId
+    | QueueSpillbackStarted of LaneId
+    | QueueSpillbackEnded of LaneId
+    | DownstreamBlocked of LaneId
+    | RerouteRequested of MovementId * RoadNodeId
+    | PedestrianCrossingStarted of MovementId * RoadNodeId
+    | PedestrianCrossingEnded of MovementId * RoadNodeId
     | ConstructionStarted of RoadSegmentId
     | ConstructionEnded of RoadSegmentId
     | EmergencyResponseDelayed of InstitutionId * delayMinutes: int
@@ -410,6 +458,13 @@ type MovingEntityView =
       HeadingRadians: float option
       SpeedKph: float
       Status: MovementStatus
+      LaneId: LaneId option
+      DesiredLaneId: LaneId option
+      SegmentId: RoadSegmentId option
+      IntersectionId: RoadNodeId option
+      NextManeuver: Movement option
+      DistanceToManeuverMeters: float option
+      DriverProfile: DriverProfile option
       Progress: float
       DelaySeconds: int
       RoutePreview: Coordinates list }
@@ -431,7 +486,10 @@ type IntersectionTrafficView =
       WaitingVehicleCount: int
       AverageDelaySeconds: float
       ControlType: IntersectionControl
-      CurrentPhase: int option }
+      CurrentPhase: int option
+      SecondsRemaining: int option
+      QueueLength: int
+      SpillbackBlocked: bool }
 type TrafficVisualizationEvent =
     | VehicleEnteredSegment of VehicleId * RoadSegmentId
     | VehicleLeftSegment of VehicleId * RoadSegmentId
@@ -476,8 +534,11 @@ type TrafficFrame =
       Vehicles: MovingEntityView list
       Pedestrians: MovingEntityView list
       TransitVehicles: MovingEntityView list
+      LaneOccupancies: LaneOccupancy list
       RoadSegmentTrafficViews: RoadSegmentTrafficView list
       IntersectionTrafficViews: IntersectionTrafficView list
+      SignalPhaseStates: SignalPhaseState list
+      RecentTrafficEvents: TransportEvent list
       Events: TrafficVisualizationEvent list
       Metrics: TrafficFrameMetrics }
 type TrafficFrameDiff =
@@ -499,6 +560,10 @@ type TransportState =
       Vehicles: Map<VehicleId, VehicleState>
       Incidents: Map<TransportIncidentId, TransportIncident>
       AccessByNeighborhood: Map<NeighborhoodId, AccessProfile>
+      LaneOccupancies: Map<LaneId, LaneOccupancy>
+      SignalPhaseStates: Map<RoadNodeId, SignalPhaseState>
+      PedestrianSegmentOccupancy: Map<RoadSegmentId, MovementId list>
+      BikeSegmentOccupancy: Map<RoadSegmentId, MovementId list>
       SegmentCongestion: Map<RoadSegmentId, float>
       TravelTimeReliability: Map<PlaceId * PlaceId, float>
       RecentEvents: TransportEvent list

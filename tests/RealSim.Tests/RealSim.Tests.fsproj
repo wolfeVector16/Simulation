@@ -29,11 +29,14 @@
     <Compile Include="HouseholdEconomyTests.fs" />
     <Compile Include="HouseholdBillRoutingTests.fs" />
     <Compile Include="TransportAndDecisionTests.fs" />
+    <Compile Include="MesoscopicTrafficTests.fs" />
+    <Compile Include="IndustrialLandUseTests.fs" />
     <Compile Include="SocialAndInvariantTests.fs" />
     <Compile Include="PerformanceStructureTests.fs" />
     <Compile Include="CommandSystemTests.fs" />
     <Compile Include="StreetSimulationTests.fs" />
     <Compile Include="AvaloniaViewerTests.fs" />
+    <Compile Include="JuniperCollapseDiagnosticsTests.fs" />
   </ItemGroup>
 
 </Project>

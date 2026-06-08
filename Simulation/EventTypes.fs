@@ -12,6 +12,8 @@ type DomainEvent =
     | BillMissed of EventId * HouseholdId * BillKind * amount: decimal
     | EvictionFiled of EventId * HouseholdId * UnitId
     | EvictionCompleted of EventId * HouseholdId * UnitId
+    | HouseholdCreated of EventId * HouseholdId * SimId list
+    | HouseholdMovedIn of EventId * HouseholdId * UnitId
     | IllnessOccurred of EventId * SimId
     | RelationshipChanged of EventId * RelationshipId * RelationshipDimensions
     | ConflictOccurred of EventId * actor: SimId * target: SimId * reason: string

@@ -35,6 +35,7 @@
     <Compile Include="MapTypes.fs" />
     <Compile Include="WorldGenerationTypes.fs" />
     <Compile Include="ZoningTypes.fs" />
+    <Compile Include="IndustrialTypes.fs" />
     <Compile Include="BuildingTypes.fs" />
     <Compile Include="CityTypes.fs" />
     <Compile Include="DiagnosticsTypes.fs" />
@@ -53,10 +54,12 @@
     <Compile Include="HouseholdTypes.fs" />
     <Compile Include="WorldIndexTypes.fs" />
     <Compile Include="WorldState.fs" />
+    <Compile Include="CityMetrics.fs" />
     <Compile Include="HouseholdEconomy.fs" />
     <Compile Include="MapGraph.fs" />
     <Compile Include="TransportRouting.fs" />
     <Compile Include="Economy.fs" />
+    <Compile Include="IndustrialModel.fs" />
     <Compile Include="CitySystems.fs" />
     <Compile Include="LifeSim.fs" />
     <Compile Include="Diagnostics.fs" />
@@ -68,7 +71,9 @@
     <Compile Include="SimulationPipeline.fs" />
     <Compile Include="SimBehavior.fs" />
     <Compile Include="CommandSystem.fs" />
+    <Compile Include="DevelopmentSystem.fs" />
     <Compile Include="Engine.fs" />
+    <Compile Include="CollapseDiagnostics.fs" />
   </ItemGroup>
 
 </Project>

@@ -16,20 +16,6 @@ module CitySystems =
     let private clampDemand value =
         value |> max -1.0 |> min 1.0
 
-    let private buildingPopulation (parcel: Parcel) =
-        parcel.Building
-        |> Option.map (fun building -> if building.Use = Housing && building.Status = Occupied then building.Occupants else 0)
-        |> Option.defaultValue 0
-
-    let private buildingJobs (parcel: Parcel) =
-        parcel.Building
-        |> Option.map (fun building ->
-            if (building.Use = Commerce || building.Use = Industry) && building.Status = Occupied then
-                building.Jobs
-            else
-                0)
-        |> Option.defaultValue 0
-
     let private hasOccupiedBuilding (parcel: Parcel) =
         parcel.Building
         |> Option.exists (fun building -> building.Status = Occupied)
@@ -47,7 +33,14 @@ module CitySystems =
         | TransitOrientedZone -> demand.Commercial
         | IndustrialZone
         | AgriculturalZone
-        | WarehouseLogisticsZone -> demand.Industrial
+        | LightIndustrialZone
+        | FlexIndustrialZone
+        | WarehouseLogisticsZone
+        | MixedUseProductionZone
+        | HeavyIndustrialZone
+        | HazardousIndustrialZone
+        | ExtractiveIndustrialZone
+        | WasteManagementZone -> demand.Industrial
         | CivicZone
         | SchoolZone
         | MedicalZone
@@ -232,7 +225,9 @@ module CitySystems =
                           Occupants = 0
                           Jobs = jobs
                           Status = Occupied } }
-        | Some building, _ when parcel.Desirability < 0.18 || not parcel.Powered ->
+        | Some building, _ when (parcel.Desirability < 0.18 || not parcel.Powered) && building.Status = Occupied ->
+            { parcel with Building = Some { building with Status = Vacant } }
+        | Some building, _ when (parcel.Desirability < 0.18 || not parcel.Powered) && building.Status = Vacant ->
             { parcel with Building = Some { building with Status = Abandoned } }
         | Some building, _ when building.Status = Abandoned && parcel.Desirability > 0.45 && parcel.Powered ->
             { parcel with Building = Some { building with Status = Occupied } }
@@ -240,8 +235,8 @@ module CitySystems =
 
     let private calculateIndicators (city: CityState) =
         let parcels = city.Parcels |> Map.toSeq |> Seq.map snd |> Seq.toList
-        let population = parcels |> List.sumBy buildingPopulation
-        let jobs = parcels |> List.sumBy buildingJobs
+        let population = city.Indicators.Population
+        let jobs = city.Indicators.Jobs
         let service kind =
             parcels
             |> List.averageBy (fun parcel -> serviceCoverage kind parcel.Position city.Services)
@@ -252,12 +247,6 @@ module CitySystems =
         let crime = parcels |> List.averageBy _.Crime
         let fireRisk = parcels |> List.averageBy _.FireRisk
 
-        let unemployment =
-            if population = 0 then
-                0.0
-            else
-                max 0.0 (float (population - jobs) / float population)
-
         let traffic =
             let totalCapacity = city.Services |> List.filter (fun s -> s.Kind = TransitService) |> List.sumBy _.Capacity
             let roadPressure = if jobs = 0 then 0.0 else min 1.0 (float population / float jobs)
@@ -265,7 +254,7 @@ module CitySystems =
 
         { Population = population
           Jobs = jobs
-          Unemployment = unemployment
+          Unemployment = city.Indicators.Unemployment
           AverageLandValue = averageLandValue
           AverageDesirability = averageDesirability
           Pollution = pollution

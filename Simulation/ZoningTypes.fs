@@ -18,8 +18,15 @@ type ZoneType =
     | OfficeZone
     | SchoolZone
     | MedicalZone
+    | LightIndustrialZone
+    | FlexIndustrialZone
     | WarehouseLogisticsZone
+    | MixedUseProductionZone
+    | HeavyIndustrialZone
+    | HazardousIndustrialZone
+    | ExtractiveIndustrialZone
     | UtilityZone
+    | WasteManagementZone
     | ParkOpenSpaceZone
     | TransitOrientedZone
     | SpecialDistrictZone

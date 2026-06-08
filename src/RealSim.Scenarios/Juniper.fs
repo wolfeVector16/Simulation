@@ -294,7 +294,7 @@ module Juniper =
               { Id = importer
                 Name = "North Freight Terminal"
                 Kind = OutsideConnection
-                Position = { X = 80.0; Y = 360.0 }
+                Position = { X = 650.0; Y = 320.0 }
                 RoadAccess = NearestRoadAccess 900.0
                 Economy =
                     Some
@@ -584,7 +584,7 @@ module Juniper =
               parcel "Main Street Retail" CommercialZone LowDensity 420.0 330.0 (building "Local Shops" Commerce MiddleWealth 20 0 20) 0.55 0.67 0.05
               parcel "Civic Office Row" CommercialZone MediumDensity 620.0 500.0 (building "Civic Analytics Offices" Commerce MiddleWealth 60 0 60) 0.62 0.70 0.04
               parcel "Foundry District" IndustrialZone MediumDensity 780.0 220.0 (building "Foundry Cooperative Works" Industry LowWealth 55 0 55) 0.30 0.35 0.36
-              parcel "Freight Terminal Yard" IndustrialZone LowDensity 80.0 360.0 (building "North Freight Terminal" Industry LowWealth 24 0 24) 0.28 0.32 0.30
+              parcel "Freight Terminal Yard" IndustrialZone LowDensity 650.0 320.0 (building "North Freight Terminal" Industry LowWealth 24 0 24) 0.28 0.32 0.30
               parcel "Juniper Elementary Campus" CivicZone LowDensity 300.0 640.0 (building "Juniper Elementary" PublicService MiddleWealth 120 0 14) 0.58 0.76 0.02
               parcel "Juniper Park Commons" ParkZone LowDensity 430.0 650.0 (building "Juniper Park" Recreation MiddleWealth 0 0 0) 0.64 0.82 0.01
               parcel "South Expansion Tract" Unzoned LowDensity 640.0 260.0 None 0.34 0.42 0.08 ]
@@ -691,8 +691,14 @@ module Juniper =
               Traffic = 0.0 }
 
         let city =
+            let industrialSites =
+                [ parcelIdNamed "Foundry District", IndustrialModel.siteFor LightManufacturing
+                  parcelIdNamed "Freight Terminal Yard", IndustrialModel.siteFor IndustrialUse.Warehouse ]
+                |> Map.ofList
+
             { Name = "Juniper Falls"
               Parcels = parcels
+              IndustrialSites = industrialSites
               Utilities = utilities
               Services = services
               Budget =
@@ -1482,6 +1488,10 @@ module Juniper =
                 [ downtown, access 0.62 0.74 0.76 0.62 0.66 0.48 0.42
                   eastMarket, access 0.72 0.18 0.30 0.48 0.34 0.22 0.61 ]
                 |> Map.ofList
+              LaneOccupancies = Map.empty
+              SignalPhaseStates = Map.empty
+              PedestrianSegmentOccupancy = Map.empty
+              BikeSegmentOccupancy = Map.empty
               SegmentCongestion = roadSegments |> List.map (fun segment -> segment.Id, 0.0) |> Map.ofList
               TravelTimeReliability = Map.empty
               RecentEvents = []
@@ -1721,6 +1731,8 @@ module Juniper =
 
         let world =
             { world with GenerationReport = WorldGeneration.refreshReport world }
+
+        let world = CityMetrics.updateIndicators world
 
         { world with Diagnostics = Diagnostics.tick world }
 

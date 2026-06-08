@@ -76,6 +76,7 @@ type AdvisorMessage =
 type CityState =
     { Name: string
       Parcels: Map<ParcelId, Parcel>
+      IndustrialSites: Map<ParcelId, IndustrialSite>
       Utilities: UtilitySource list
       Services: ServiceFacility list
       Budget: Budget
